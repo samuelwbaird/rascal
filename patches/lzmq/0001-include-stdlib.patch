@@ -1,0 +1,13 @@
+lzutils.h uses malloc and free without including stdlib.h, which modern
+compilers reject as an implicit function declaration.
+
+--- a/src/lzutils.h	2026-10-12 21:26:20
++++ b/src/lzutils.h	2026-10-12 21:26:41
+@@ -15,6 +15,7 @@
+ #include <winsock2.h>
+ #endif
+ 
++#include <stdlib.h>
+ #include "lua.h"
+ #include "lauxlib.h"
+ 

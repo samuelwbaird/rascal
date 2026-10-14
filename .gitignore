@@ -3,6 +3,8 @@
 # Learn more about .gitignore:
 #     https://www.atlassian.com/git/tutorials/saving-changes/gitignore
 
+reference_libraries
+
 # Node artifact files
 node_modules/
 dist/
@@ -48,3 +50,6 @@ Thumbs.db
 *.mov
 *.wmv
 
+
+# rascal build output and downloaded dependency archives
+build/
