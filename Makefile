@@ -4,6 +4,8 @@
 #   make test         build, run the test suite and check linkage
 #   make fetch        download and unpack all dependency sources only
 #   make dist         stripped binary + licences in dist/rascal-<version>-<platform>/
+#   make install      install to $(PREFIX)/bin (default /usr/local), see below
+#   make uninstall    remove what make install installed
 #   make info         show platform, options and pinned dependency versions
 #   make clean        remove this platform's build output (keeps downloads)
 #   make distclean    remove all build output, downloads and dist
@@ -146,7 +148,7 @@ $(OBJ)/host/lua.o: $(SRC)/lua/src/lua.c config.mk $(ALL_STAMPS)
 # -----------------------------------------------------------------------------
 # convenience targets
 
-.PHONY: fetch test check-linkage licenses dist info clean distclean
+.PHONY: fetch test check-linkage licenses dist install uninstall info clean distclean
 
 fetch: $(ALL_STAMPS)
 
@@ -179,6 +181,26 @@ dist: $(RASCAL) $(BUILD)/LICENSES.txt
 	@cp $(RASCAL) $(BUILD)/LICENSES.txt $(DIST)/
 	@strip $(DIST)/rascal
 	@echo "packaged $(DIST)"
+
+# PREFIX sets the install location, and DESTDIR stages the install under
+# another root for packaging, eg. make install PREFIX=$HOME/.local
+# the installed binary is stripped unless DEBUG=1
+PREFIX ?= /usr/local
+INSTALL_BIN := $(DESTDIR)$(PREFIX)/bin
+INSTALL_DOC := $(DESTDIR)$(PREFIX)/share/doc/rascal
+
+install: $(RASCAL) $(BUILD)/LICENSES.txt
+	@mkdir -p $(INSTALL_BIN) $(INSTALL_DOC)
+	@cp $(RASCAL) $(INSTALL_BIN)/rascal.tmp
+	@$(if $(filter 1,$(DEBUG)),true,strip $(INSTALL_BIN)/rascal.tmp)
+	@chmod 755 $(INSTALL_BIN)/rascal.tmp
+	@mv -f $(INSTALL_BIN)/rascal.tmp $(INSTALL_BIN)/rascal
+	@cp $(BUILD)/LICENSES.txt $(INSTALL_DOC)/LICENSES.txt
+	@echo "installed $(INSTALL_BIN)/rascal"
+
+uninstall:
+	rm -f $(INSTALL_BIN)/rascal
+	rm -rf $(INSTALL_DOC)
 
 info:
 	@echo "rascal $(VERSION)"

@@ -127,11 +127,14 @@ DOCKER_PLATFORM=linux/amd64 scripts/docker-build.sh alpine   # x86_64 from Apple
 
 | | |
 | --- | --- |
+| `make install` | install the stripped binary to `$PREFIX/bin` (default `/usr/local`) and licences to `$PREFIX/share/doc/rascal`; `DESTDIR` is supported for packaging |
+| `make uninstall` | remove what `make install` installed, with the same `PREFIX` / `DESTDIR` |
 | `make dist` | stripped binary and `LICENSES.txt` in `dist/rascal-<version>-<platform>/` |
 | `make fetch` | download and unpack sources only, eg. before going offline |
 | `make clean` | remove this platform's build directory, keeping downloads |
 | `make distclean` | remove `build/` and `dist/` entirely |
-| `DEBUG=1` | `-O0 -g` |
+| `DEBUG=1` | `-O0 -g`, and `make install` leaves the binary unstripped |
+| `PREFIX=` | install location, eg. `make install PREFIX=$HOME/.local` |
 | `CC=`, `CXX=`, `CFLAGS=` | the usual |
 
 ## Notes
