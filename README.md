@@ -28,12 +28,14 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
 
 `rascal` is the standard Lua interpreter (`lua.c`), so `rascal script.lua`, `rascal -e`, `rascal -l` and the REPL all work as usual.
 
+- **Init script**: every Lua state first runs the embedded `init` module, `lua/init.lua`. It currently makes prelude global (`require('prelude').global()`), so `class`, `list` and friends are available everywhere. It runs before `RASCAL_INIT`, `-e`, `-l` and the script, and before the global `arg` table exists. Start rascal with `--no-init` to skip it, in threads too. `--no-init` must come before the script name; after it, it is passed to the script like any other argument. It doesn't affect `RASCAL_INIT`, which is skipped with `-E` as in standard Lua. If the init script fails, rascal exits with the error. A failure inside a thread aborts the whole process.
 - **Modules**: compiled in C modules are registered in `package.preload`. Embedded Lua modules are found by a searcher placed right after it, so they take priority over files on disk.
 - **Threads**: every Lua state rascal creates gets the same modules, including each `llthreads2` / `lzmq.threads` thread. Thread code can `require` anything the main state can.
 - **Environment**: rascal ignores `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`, so it is isolated from any other Lua installation. Use `RASCAL_PATH`, `RASCAL_CPATH` and `RASCAL_INIT` instead. The default path is only `./?.lua;./?/init.lua`.
 - **`RASCAL_PREFER_FILES=1`**: searches `package.path` before the embedded modules. This is handy while editing a module under `lua/` without rebuilding, eg. `RASCAL_PREFER_FILES=1 RASCAL_PATH='lua/?.lua;lua/?/init.lua' rascal app.lua`.
 - **`require 'rascal'`** reports what the binary was built with:
   - `version`, `platform` and `lua_version`
+  - `initialised`, false when started with `--no-init`
   - `dependencies` (name → version)
   - `c_modules` and `lua_modules`
   - `source(name)`, which returns an embedded module's source
@@ -46,7 +48,8 @@ config.mk           platform detection and build options
 deps/<name>.mk      one file per dependency: version, url, sha256, sources, modules
 patches/<name>/     patches applied to a dependency after unpacking, in order
 lua/                Lua modules embedded in the executable (lua/a/b.lua -> require 'a.b')
-src/                rascal's own C: opening Lua states, the embedded module searcher
+lua/init.lua        the init script run in every Lua state
+src/                rascal's own C: command line, opening Lua states, the embedded module searcher
 tools/embed.lua     generates the C tables of modules from the build
 scripts/            fetching, linkage checks, container builds
 docker/             Linux build environments

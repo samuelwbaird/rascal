@@ -1,4 +1,6 @@
--- minimal test runner: rascal tests/run.lua tests/test_*.lua
+-- minimal test runner
+--   rascal tests/run.lua                      runs every test_*.lua beside this file
+--   rascal tests/run.lua tests/test_zmq.lua   runs just the given test files
 -- each test file is a plain script, a test fails if it raises an error
 
 function expect_equal(actual, expected, message)
@@ -8,8 +10,20 @@ function expect_equal(actual, expected, message)
 	end
 end
 
+local paths = { table.unpack(arg) }
+if #paths == 0 then
+	local lfs = require('lfs')
+	local dir = arg[0]:match('^(.*)/[^/]*$') or '.'
+	for name in lfs.dir(dir) do
+		if name:match('^test_.*%.lua$') then
+			paths[#paths + 1] = dir .. '/' .. name
+		end
+	end
+	table.sort(paths)
+end
+
 local failed = 0
-for _, path in ipairs(arg) do
+for _, path in ipairs(paths) do
 	local name = path:match('([^/]+)%.lua$') or path
 	local started = os.clock()
 	local ok, err = xpcall(dofile, debug.traceback, path)
@@ -21,5 +35,5 @@ for _, path in ipairs(arg) do
 	end
 end
 
-print(string.format('%d of %d test files passed', #arg - failed, #arg))
+print(string.format('%d of %d test files passed', #paths - failed, #paths))
 os.exit(failed == 0 and 0 or 1)

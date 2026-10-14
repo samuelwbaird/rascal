@@ -83,7 +83,7 @@ ALL_LUAFILES := $(foreach m,$(ALL_LUAMODULES),$(word 2,$(subst :, ,$(m))))
 RASCAL := $(BIN)/rascal
 HOST_LUA := $(BUILD)/host/lua
 
-RASCAL_OBJS := $(OBJ)/rascal/lua.o $(OBJ)/rascal/rascal.o $(OBJ)/rascal/modules.o
+RASCAL_OBJS := $(OBJ)/rascal/main.o $(OBJ)/rascal/lua.o $(OBJ)/rascal/rascal.o $(OBJ)/rascal/modules.o
 
 all: $(RASCAL)
 	@echo "built $(RASCAL)"
@@ -94,10 +94,11 @@ $(RASCAL): $(RASCAL_OBJS) $(ALL_DEP_OBJS) $(ALL_DEP_LIBS)
 	@$(LINK) -o $@ $(RASCAL_OBJS) $(ALL_DEP_OBJS) $(ALL_DEP_LIBS) $(LDFLAGS) $(LIBS)
 
 # the standard Lua interpreter, with every Lua state opened by rascal_openlibs
+# and main renamed so that src/main.c can handle rascal's own options first
 $(OBJ)/rascal/lua.o: $(SRC)/lua/src/lua.c config.mk $(ALL_STAMPS)
 	@mkdir -p $(@D)
 	@echo "  CC    rascal/lua.c"
-	@$(COMPILE_DEP) -DluaL_openlibs=rascal_openlibs -DLUA_PROGNAME='"rascal"' -MMD -MP -c $< -o $@
+	@$(COMPILE_DEP) -DluaL_openlibs=rascal_openlibs -Dmain=lua_main -DLUA_PROGNAME='"rascal"' -MMD -MP -c $< -o $@
 
 $(OBJ)/rascal/%.o: src/%.c config.mk $(ALL_STAMPS)
 	@mkdir -p $(@D)
@@ -150,7 +151,7 @@ $(OBJ)/host/lua.o: $(SRC)/lua/src/lua.c config.mk $(ALL_STAMPS)
 fetch: $(ALL_STAMPS)
 
 test: $(RASCAL)
-	@$(RASCAL) tests/run.lua $(sort $(wildcard tests/test_*.lua))
+	@$(RASCAL) tests/run.lua
 	@scripts/check-linkage.sh $(RASCAL) $(STATIC)
 
 check-linkage: $(RASCAL)

@@ -12,6 +12,9 @@
 #include "rascal.h"
 
 
+int rascal_init_enabled = 1;
+
+
 static const rascal_LuaModule *find_luamodule (const char *name) {
   const rascal_LuaModule *m;
   for (m = rascal_luamodules; m->name != NULL; m++) {
@@ -84,6 +87,15 @@ void rascal_openlibs (lua_State *L) {
   lua_pop(L, 1);
 
   install_searcher(L);
+
+  if (rascal_init_enabled) {
+    lua_getglobal(L, "require");
+    lua_pushliteral(L, RASCAL_INIT_MODULE);
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+      lua_pushfstring(L, "rascal init failed: %s", lua_tostring(L, -1));
+      lua_error(L);
+    }
+  }
 }
 
 
@@ -116,6 +128,8 @@ int luaopen_rascal (lua_State *L) {
   lua_setfield(L, -2, "platform");
   lua_pushliteral(L, LUA_RELEASE);
   lua_setfield(L, -2, "lua_version");
+  lua_pushboolean(L, rascal_init_enabled);
+  lua_setfield(L, -2, "initialised");
 
   lua_newtable(L);
   for (d = rascal_dependencies; d->name != NULL; d++) {
