@@ -72,6 +72,30 @@ db:ensure_column('other', 'name', 'TEXT')
 db:ensure_index('other', { 'name' })
 expect_equal(db:query([[SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('item_index_name', 'other_index_name')]]).value, 2)
 
+-- unique columns and autoincrement ids
+db:ensure_table('account', true)
+db:ensure_column('account', 'email', 'TEXT', nil, true)
+db:ensure_column('account', 'email', 'TEXT', nil, true)
+local first_account = db:insert('account', { email = 'a@example.com' })
+expect_error('UNIQUE constraint failed', db.insert, db, 'account', { email = 'a@example.com' })
+expect_equal(db:upsert('account', { email = 'a@example.com' }, { 'email' }), nil, 'upsert on a unique column')
+db:delete('account', first_account)
+assert(db:insert('account', { email = 'b@example.com' }) > first_account, 'autoincrement id reused')
+db:ensure_index('account', { 'email' }, true)
+expect_equal(db:query([[SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'account_unique_email']]).value, 1)
+
+-- blobs
+local binary = 'a\0b\255c'
+db:ensure_column('item', 'payload', 'BLOB')
+local blob_id = db:insert('item', { name = 'blob', payload = database.blob(binary) })
+expect_equal(db:query('SELECT typeof("payload") FROM "item" WHERE "id" = ?', { blob_id }).value, 'blob')
+expect_equal(db:select('item', blob_id).row.payload, binary)
+expect_equal(db:query('SELECT typeof(?)', { database.blob('x') }).value, 'blob')
+expect_equal(db:query('SELECT typeof(:b)', { b = database.blob('y') }).value, 'blob')
+expect_equal(db:query('SELECT typeof(?) AS t', { 'plain' }).value, 'text')
+expect_equal(database.safe_value(database.blob('\0\255')), "X'00FF'")
+expect_equal(db:query('SELECT ' .. database.safe_value(database.blob(binary))).value, binary)
+
 -- errors are raised with the message and the SQL
 expect_error('no such table', db.query, db, 'SELECT * FROM missing')
 db:query('CREATE UNIQUE INDEX IF NOT EXISTS "item_unique_name" ON "item" ("name")')

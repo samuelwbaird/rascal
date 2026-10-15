@@ -27,6 +27,13 @@ local database = prelude.class()
 -- use in place of nil to set a column to NULL, or to match NULL in a where clause
 database.null = setmetatable({}, { __tostring = function () return 'database.null' end })
 
+-- wrap a string value to bind it as a blob rather than text, eg. for binary data
+-- blobs are read back as plain strings
+local blob_meta = { __tostring = function (blob) return 'database.blob(' .. #blob.value .. ' bytes)' end }
+function database.blob(value)
+	return setmetatable({ value = value }, blob_meta)
+end
+
 -- log each query with the global log function (default for new connections)
 database.log_queries = false
 
@@ -85,19 +92,36 @@ end
 
 -- general purpose SQL query function with bindings ------------------------------------------
 
--- copy bindings for lsqlite3, with database.null as nil (bound as NULL), and
--- count positional bindings, including any null ones
+-- copy bindings for lsqlite3, with database.null as nil (bound as NULL) and
+-- blobs separated out to bind afterwards, and count positional bindings,
+-- including any null ones
 local function prepare_bindings(bindings)
-	local prepared, positional = {}, 0
+	local prepared, blobs, positional = {}, nil, 0
 	for k, v in pairs(bindings) do
 		if math.type(k) == 'integer' and k > positional then
 			positional = k
 		end
-		if v ~= database.null then
+		if getmetatable(v) == blob_meta then
+			blobs = blobs or {}
+			blobs[k] = v.value
+		elseif v ~= database.null then
 			prepared[k] = v
 		end
 	end
-	return prepared, positional
+	return prepared, blobs, positional
+end
+
+-- the parameter index for a positional or named binding
+local function parameter_index(statement, parameters, k)
+	if math.type(k) == 'integer' then
+		return k
+	end
+	for i = 1, parameters do
+		local name = statement:bind_parameter_name(i)
+		if name and name:sub(2) == k then
+			return i
+		end
+	end
 end
 
 function database:query(query, bindings)
@@ -127,12 +151,21 @@ function database:query(query, bindings)
 		if not bindings then
 			error('database: query expects ' .. parameters .. ' bindings: ' .. query, 2)
 		end
-		local prepared, positional = prepare_bindings(bindings)
+		local prepared, blobs, positional = prepare_bindings(bindings)
 		if positional > 0 and positional ~= parameters then
 			error('database: query expects ' .. parameters .. ' bindings, got ' .. positional .. ': ' .. query, 2)
 		end
 		if statement:bind_names(prepared) ~= sql.OK then
 			error('database: ' .. self.sqlite:errmsg() .. ' binding: ' .. query, 2)
+		end
+		-- bind_names binds strings as text, so blobs are bound again individually
+		if blobs then
+			for k, value in pairs(blobs) do
+				local index = parameter_index(statement, parameters, k)
+				if index and statement:bind_blob(index, value) ~= sql.OK then
+					error('database: ' .. self.sqlite:errmsg() .. ' binding: ' .. query, 2)
+				end
+			end
 		end
 	elseif bindings and next(bindings) then
 		error('database: query has no parameters to bind: ' .. query, 2)
@@ -342,42 +375,50 @@ function database:has_column(table, column)
 	return self:query('SELECT "name" FROM pragma_table_info(?) WHERE "name" = ?', { table, column }).has_rows
 end
 
-function database:ensure_table(table)
+-- every table has an "id" INTEGER PRIMARY KEY column. With autoincrement,
+-- ids are never reused, even after the rows with the highest ids are deleted
+-- (it only applies when the table is created)
+function database:ensure_table(table, autoincrement)
 	if not self:has_table(table) then
 		local builder = self:query_builder()
 		builder:add('CREATE TABLE')
 		builder:add_name(table, true)
-		builder:add('("id" INTEGER PRIMARY KEY)')
+		builder:add(autoincrement and '("id" INTEGER PRIMARY KEY AUTOINCREMENT)' or '("id" INTEGER PRIMARY KEY)')
 		return builder:query()
 	end
 end
 
 -- type is SQL written into the statement as given, eg. 'TEXT' or 'INTEGER'
 -- a default value (written in as a literal) also makes the column NOT NULL
-function database:ensure_column(table, column, type, default_value)
-	if self:has_column(table, column) then
-		return
+-- unique adds a unique index on the column, as SQLite cannot add a column
+-- with a UNIQUE constraint to an existing table, the effect is the same
+function database:ensure_column(table, column, type, default_value, unique)
+	if not self:has_column(table, column) then
+		local builder = self:query_builder()
+		builder:add('ALTER TABLE')
+		builder:add_name(table, true)
+		builder:add('ADD COLUMN')
+		builder:add_name(column, true)
+		builder:add(type)
+		if default_value ~= nil then
+			builder:add('DEFAULT ' .. database.safe_value(default_value))
+			builder:add('NOT NULL')
+		end
+		builder:query()
 	end
-	local builder = self:query_builder()
-	builder:add('ALTER TABLE')
-	builder:add_name(table, true)
-	builder:add('ADD COLUMN')
-	builder:add_name(column, true)
-	builder:add(type)
-	if default_value ~= nil then
-		builder:add('DEFAULT ' .. database.safe_value(default_value))
-		builder:add('NOT NULL')
+	if unique then
+		self:ensure_index(table, { column }, true)
 	end
-	return builder:query()
 end
 
 -- creates an index named <table>_index_<column>_<column>...
-function database:ensure_index(table, indexed_columns)
+-- or a unique index named <table>_unique_<column>_<column>...
+function database:ensure_index(table, indexed_columns, unique)
 	local index_name_parts = prelude.list(indexed_columns)
-	index_name_parts:insert(1, 'index')
+	index_name_parts:insert(1, unique and 'unique' or 'index')
 	index_name_parts:insert(1, table)
 	local builder = self:query_builder()
-	builder:add('CREATE INDEX IF NOT EXISTS')
+	builder:add(unique and 'CREATE UNIQUE INDEX IF NOT EXISTS' or 'CREATE INDEX IF NOT EXISTS')
 	builder:add_name(index_name_parts:concat('_'), true)
 	builder:add('ON')
 	builder:add_name(table, true)
@@ -423,6 +464,8 @@ function database.safe_value(value)
 			error('database: cannot write a string containing zero bytes as an SQL value', 2)
 		end
 		return "'" .. value:gsub("'", "''") .. "'"
+	elseif getmetatable(value) == blob_meta then
+		return "X'" .. value.value:gsub('.', function (c) return string.format('%02X', c:byte()) end) .. "'"
 	end
 	error('database: cannot write a ' .. type(value) .. ' as an SQL value', 2)
 end
