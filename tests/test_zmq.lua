@@ -2,7 +2,7 @@
 local zmq = require('lzmq')
 local zthreads = require('lzmq.threads')
 local ztimer = require('lzmq.timer')
-local rascal = require('rascal')
+local rascal = require('rascal.build')
 
 local version = zmq.version()
 expect_equal(table.concat(version, '.'), rascal.dependencies.zeromq)

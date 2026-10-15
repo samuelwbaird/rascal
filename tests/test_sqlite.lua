@@ -1,6 +1,6 @@
 -- lsqlite3 against the compiled in sqlite
 local sqlite3 = require('lsqlite3')
-local rascal = require('rascal')
+local rascal = require('rascal.build')
 
 expect_equal(sqlite3.version(), rascal.dependencies.sqlite)
 

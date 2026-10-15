@@ -20,8 +20,9 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
 | `cmsgpack`, `cmsgpack.safe` | [lua-cmsgpack](https://github.com/antirez/lua-cmsgpack) | 0.4.0 |
 | `lfs` | [LuaFileSystem](https://github.com/lunarmodules/luafilesystem) | 1.9.0 |
 | `prelude` | [prelude](https://github.com/samuelwbaird/prelude), embedded from `lua/` | |
-| `database` | simple SQLite access over lsqlite3, embedded from `lua/database.lua` | |
-| `rascal` | build information, see below | |
+| `rascal.database` | simple SQLite access over lsqlite3, embedded from `lua/rascal/database.lua` | |
+| `rascal.stowage` | key value store with a log and reverse index per key, over `rascal.database` | |
+| `rascal.build` | build information, see below | |
 
 `make info` lists the pinned versions.
 
@@ -34,7 +35,7 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
 - **Threads**: every Lua state rascal creates gets the same modules, including each `llthreads2` / `lzmq.threads` thread. Thread code can `require` anything the main state can.
 - **Environment**: rascal ignores `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`, so it is isolated from any other Lua installation. Use `RASCAL_PATH`, `RASCAL_CPATH` and `RASCAL_INIT` instead. The default path is only `./?.lua;./?/init.lua`.
 - **`RASCAL_PREFER_FILES=1`**: searches `package.path` before the embedded modules. This is handy while editing a module under `lua/` without rebuilding, eg. `RASCAL_PREFER_FILES=1 RASCAL_PATH='lua/?.lua;lua/?/init.lua' rascal app.lua`.
-- **`require 'rascal'`** reports what the binary was built with:
+- **`require 'rascal.build'`** reports what the binary was built with:
   - `version`, `platform` and `lua_version`
   - `initialised`, false when started with `--no-init`
   - `dependencies` (name → version)
@@ -50,6 +51,7 @@ deps/<name>.mk      one file per dependency: version, url, sha256, sources, modu
 patches/<name>/     patches applied to a dependency after unpacking, in order
 lua/                Lua modules embedded in the executable (lua/a/b.lua -> require 'a.b')
 lua/init.lua        the init script run in every Lua state
+lua/rascal/         rascal's own modules (require 'rascal.<name>')
 src/                rascal's own C: command line, opening Lua states, the embedded module searcher
 tools/embed.lua     generates the C tables of modules from the build
 scripts/            fetching, linkage checks, container builds
@@ -68,9 +70,9 @@ All output is under `build/<platform>/`, so macOS and Linux builds can share one
 
 ### A Lua module
 
-Put it under `lua/` and run `make`. The module name comes from the path: `lua/net/http.lua` becomes `require 'net.http'` and `lua/net/init.lua` becomes `require 'net'`. If it has its own licence, add `lua/LICENSE.<name>` and it will be included in `LICENSES.txt`.
+Put it under `lua/` and run `make`. rascal's own modules live in `lua/rascal/`. Only `prelude` and `init` are at the top level. Don't add `lua/rascal/init.lua` unless it is meant to be `require 'rascal'` itself. The module name comes from the path: `lua/net/http.lua` becomes `require 'net.http'` and `lua/net/init.lua` becomes `require 'net'`. If it has its own licence, add `lua/LICENSE.<name>` and it will be included in `LICENSES.txt`.
 
-Embedded modules should not depend on the `init` script having run, since rascal can be started with `--no-init`. `lua/database.lua` is the reference example. At the top of a module:
+Embedded modules should not depend on the `init` script having run, since rascal can be started with `--no-init`. `lua/rascal/database.lua` is the reference example. At the top of a module:
 
 ```lua
 local prelude = require('prelude')             -- require dependencies as locals, not the init globals

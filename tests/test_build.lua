@@ -1,5 +1,5 @@
--- the rascal module describes the build
-local rascal = require('rascal')
+-- the rascal.build module describes the build
+local rascal = require('rascal.build')
 
 expect_equal(type(rascal.version), 'string')
 expect_equal(rascal.lua_version:match('^Lua 5%.%d'), _VERSION)
@@ -23,6 +23,8 @@ for _, name in ipairs(rascal.lua_modules) do
 end
 assert(contains(rascal.c_modules, 'lfs'))
 assert(contains(rascal.lua_modules, 'prelude'))
+assert(contains(rascal.lua_modules, 'rascal.database'))
+assert(contains(rascal.c_modules, 'rascal.build'))
 
 -- embedded sources are available for inspection
 local source, path = rascal.source('prelude')

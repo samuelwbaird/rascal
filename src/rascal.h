@@ -51,6 +51,7 @@ extern int rascal_init_enabled;
 */
 void rascal_openlibs (lua_State *L);
 
-int luaopen_rascal (lua_State *L);
+/* require 'rascal.build', listed in modules.c with the other C modules */
+int luaopen_rascal_build (lua_State *L);
 
 #endif

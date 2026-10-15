@@ -57,7 +57,7 @@
 
 local prelude = require('prelude')
 -- sqlite is the backing store
-local database = require('database')
+local database = require('rascal.database')
 -- msgpack is the encoding of values where required
 local cmsgpack = require('cmsgpack')
 

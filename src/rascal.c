@@ -78,8 +78,6 @@ void rascal_openlibs (lua_State *L) {
   luaL_openlibs(L);
 
   luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE);
-  lua_pushcfunction(L, luaopen_rascal);
-  lua_setfield(L, -2, "rascal");
   for (m = rascal_cmodules; m->name != NULL; m++) {
     lua_pushcfunction(L, m->open);
     lua_setfield(L, -2, m->name);
@@ -100,7 +98,7 @@ void rascal_openlibs (lua_State *L) {
 
 
 /*
-** require 'rascal' — what this executable was built with
+** require 'rascal.build' — what this executable was built with
 */
 
 /* rascal.source(name) returns the source of an embedded Lua module */
@@ -114,7 +112,7 @@ static int rascal_source (lua_State *L) {
 }
 
 
-int luaopen_rascal (lua_State *L) {
+int luaopen_rascal_build (lua_State *L) {
   const rascal_CModule *c;
   const rascal_LuaModule *l;
   const rascal_Dependency *d;

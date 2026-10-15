@@ -1,5 +1,5 @@
 -- the embedded stowage key value store
-local stowage = require('stowage')
+local stowage = require('rascal.stowage')
 local prelude = require('prelude')
 
 local db = stowage()
@@ -105,11 +105,11 @@ local path = os.tmpname()
 local game = stowage(path)
 
 -- exclusive by default, unless opened with exclusive false
-local ok, err = pcall(function () require('database')(path):has_table('keys') end)
+local ok, err = pcall(function () require('rascal.database')(path):has_table('keys') end)
 assert(not ok and tostring(err):find('database is locked'), 'stowage is exclusive by default')
 local shared_path = os.tmpname()
 local shared = stowage(shared_path, false)
-local other = require('database')(shared_path)
+local other = require('rascal.database')(shared_path)
 assert(other:has_table('keys'), 'not exclusive when opened with exclusive false')
 other:close()
 shared:close()

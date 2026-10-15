@@ -123,6 +123,7 @@ $(GEN)/modules.list: FORCE
 	   echo "platform $(PLATFORM)"; \
 	   echo "srcroot $(SRC)"; \
 	   $(foreach d,$(DEPS),echo "dep $(d) $($(d)_VERSION)";) \
+	   echo "cmodule rascal.build luaopen_rascal_build"; \
 	   $(foreach m,$(ALL_CMODULES),echo "cmodule $(subst :, ,$(m))";) \
 	   $(foreach m,$(ALL_LUAMODULES),echo "lua $(subst :, ,$(m))";) \
 	 } > $@.tmp

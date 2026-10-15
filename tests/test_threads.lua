@@ -15,7 +15,7 @@ local ok, result = thread:join()
 assert(ok, result)
 local decoded = require('cjson').decode(result)
 expect_equal(decoded.count, 3)
-expect_equal(decoded.sqlite, require('rascal').dependencies.sqlite)
+expect_equal(decoded.sqlite, require('rascal.build').dependencies.sqlite)
 
 -- several threads at once
 local threads = {}

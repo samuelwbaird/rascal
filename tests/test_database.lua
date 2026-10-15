@@ -1,5 +1,5 @@
 -- the embedded database module
-local database = require('database')
+local database = require('rascal.database')
 
 local function expect_error(pattern, fn, ...)
 	local ok, err = pcall(fn, ...)
