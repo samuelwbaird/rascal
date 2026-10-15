@@ -9,7 +9,6 @@ local prelude = {}
 
 --- Class meta constructor,
 -- creates a new class metatable, which also functions as the constructor for that class,
--- @param derived_from optionally specify another class to use as a base for this class, the base init function will be called before this  will chain the base init function if provided and include all method with the derived class
 -- @return A new class metatable/constructor
 -- @usage
 -- -- add methods to the class metatable as needed
@@ -25,7 +24,7 @@ local prelude = {}
 -- local newObj = NewClass('special')
 -- newObj:announce()
 
-function prelude.class(derived_from)
+function prelude.class()
 	-- create a class metatable
 	local class_meta = {}
 	class_meta.__index = class_meta
@@ -38,9 +37,6 @@ function prelude.class(derived_from)
 				obj:init(...)
 			end
 			return obj
-		end,
-		-- mix in the method from another class into this one
-		mixin = function (other_class)
 		end,
 	})
 	-- return the new class for use
@@ -76,7 +72,7 @@ end
 -- @usage
 -- local my_list = list.wrap({ 'existing', 'list' })
 function prelude.list.wrap(existing)
-	return setmetatable(existing, prelude)
+	return setmetatable(existing, prelude.list)
 end
 
 --- static method to create a list by packing a variable number of arguments
@@ -85,7 +81,7 @@ end
 -- @usage
 -- local my_list = list.pack(obj1, obj2, obj3)
 function prelude.list.pack(...)
-	local new_list = list()
+	local new_list = prelude.list()
 	new_list:push(...)
 	return new_list
 end

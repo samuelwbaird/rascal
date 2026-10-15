@@ -42,3 +42,8 @@ f:write('print(arg[1], type(class))')
 f:close()
 expect_equal(run(script .. ' --no-init'), '--no-init\tfunction')
 os.remove(script)
+
+-- init defines a global log function writing to stderr
+expect_equal(type(log), 'function')
+local logged = run([[-e "log('hello', 42, nil)"]])
+assert(logged:match('^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d hello 42 nil$'), logged)

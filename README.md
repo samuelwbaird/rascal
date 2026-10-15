@@ -20,6 +20,7 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
 | `cmsgpack`, `cmsgpack.safe` | [lua-cmsgpack](https://github.com/antirez/lua-cmsgpack) | 0.4.0 |
 | `lfs` | [LuaFileSystem](https://github.com/lunarmodules/luafilesystem) | 1.9.0 |
 | `prelude` | [prelude](https://github.com/samuelwbaird/prelude), embedded from `lua/` | |
+| `database` | simple SQLite access over lsqlite3, embedded from `lua/database.lua` | |
 | `rascal` | build information, see below | |
 
 `make info` lists the pinned versions.
@@ -28,7 +29,7 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
 
 `rascal` is the standard Lua interpreter (`lua.c`), so `rascal script.lua`, `rascal -e`, `rascal -l` and the REPL all work as usual.
 
-- **Init script**: every Lua state first runs the embedded `init` module, `lua/init.lua`. It currently makes prelude global (`require('prelude').global()`), so `class`, `list` and friends are available everywhere. It runs before `RASCAL_INIT`, `-e`, `-l` and the script, and before the global `arg` table exists. Start rascal with `--no-init` to skip it, in threads too. `--no-init` must come before the script name; after it, it is passed to the script like any other argument. It doesn't affect `RASCAL_INIT`, which is skipped with `-E` as in standard Lua. If the init script fails, rascal exits with the error. A failure inside a thread aborts the whole process.
+- **Init script**: every Lua state first runs the embedded `init` module, `lua/init.lua`. It currently makes prelude global (`require('prelude').global()`), so `class`, `list` and friends are available everywhere, and defines a global `log(...)` that writes a timestamped line to stderr. It runs before `RASCAL_INIT`, `-e`, `-l` and the script, and before the global `arg` table exists. Start rascal with `--no-init` to skip it, in threads too. `--no-init` must come before the script name; after it, it is passed to the script like any other argument. It doesn't affect `RASCAL_INIT`, which is skipped with `-E` as in standard Lua. If the init script fails, rascal exits with the error. A failure inside a thread aborts the whole process.
 - **Modules**: compiled in C modules are registered in `package.preload`. Embedded Lua modules are found by a searcher placed right after it, so they take priority over files on disk.
 - **Threads**: every Lua state rascal creates gets the same modules, including each `llthreads2` / `lzmq.threads` thread. Thread code can `require` anything the main state can.
 - **Environment**: rascal ignores `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`, so it is isolated from any other Lua installation. Use `RASCAL_PATH`, `RASCAL_CPATH` and `RASCAL_INIT` instead. The default path is only `./?.lua;./?/init.lua`.
@@ -68,6 +69,18 @@ All output is under `build/<platform>/`, so macOS and Linux builds can share one
 ### A Lua module
 
 Put it under `lua/` and run `make`. The module name comes from the path: `lua/net/http.lua` becomes `require 'net.http'` and `lua/net/init.lua` becomes `require 'net'`. If it has its own licence, add `lua/LICENSE.<name>` and it will be included in `LICENSES.txt`.
+
+Embedded modules should not depend on the `init` script having run, since rascal can be started with `--no-init`. `lua/database.lua` is the reference example. At the top of a module:
+
+```lua
+local prelude = require('prelude')             -- require dependencies as locals, not the init globals
+local log = rawget(_G, 'log') or print         -- the init global log, or print without init
+```
+
+Other conventions:
+
+- **Errors**: raise errors, with messages prefixed by the module name.
+- **Per-state behaviour**: keep in mind that each thread is its own Lua state with its own copy of any module-level state, such as caches or open connections.
 
 ### A C library or Lua C module
 
