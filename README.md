@@ -24,6 +24,7 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
 | `rascal.stowage` | key value store with a log and reverse index per key, over `rascal.database` | |
 | `rascal.messaging` | the shared ZeroMQ context, a loop per thread, inproc sockets by name | |
 | `rascal.threads` | start threads from Lua source with arguments | |
+| `rascal.services` | serve objects as named services (REQ/REP, PUSH/PULL, PUB/SUB) and connect to them | |
 | `rascal.build` | build information, see below | |
 
 `make info` lists the pinned versions.
@@ -38,6 +39,12 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
   - **Sockets:** every thread shares one ZeroMQ context. `rascal.messaging` names sockets as inproc endpoints by default, eg. `messaging.bind('PULL', 'jobs')`, with `bind_network` and `connect_network` for anything else.
   - **Running to completion:** once a thread's code, or the main script, is complete, its loop (`messaging.loop()`) runs until it has no sockets or timers and every thread it started has finished, then exits. A socket stays in the loop until it is removed with `loop:remove_socket`.
   - **Failures:** a thread that fails reports its error with `log` and ends.
+  - **Background threads:** `threads.start_background(code, ...)` starts a thread that its parent doesn't wait for, for long-running work that ends with the process.
+  - **Services:** `rascal.services` serves an object's methods by name with `services.serve(name, 'REP' | 'PULL' | 'PUB', api, target)`. Any thread can then call `services.connect(name)` or `services.subscribe(name, target)`, which wait until the service is served. The api is described with strings, eg. `{ add = 'amount:number -> total:number' }`, and values are passed by position.
+    - Errors in a REP method are raised in the caller.
+    - Services are listed in a registry that runs in a background thread.
+    - `service:bind_network(endpoint)` also makes a service reachable over the network.
+  - **Process exit:** the ZeroMQ context is shared by every thread and is never terminated, so a thread ending never interrupts sockets in other threads, and the process exits promptly.
 - **Modules**: compiled in C modules are registered in `package.preload`. Embedded Lua modules are found by a searcher placed right after it, so they take priority over files on disk.
 - **Threads**: every Lua state rascal creates gets the same modules, including each `llthreads2` / `lzmq.threads` thread. Thread code can `require` anything the main state can.
 - **Environment**: rascal ignores `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`, so it is isolated from any other Lua installation. Use `RASCAL_PATH`, `RASCAL_CPATH` and `RASCAL_INIT` instead. The default path is only `./?.lua;./?/init.lua`.

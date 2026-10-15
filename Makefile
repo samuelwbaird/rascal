@@ -124,6 +124,7 @@ $(GEN)/modules.list: FORCE
 	   echo "srcroot $(SRC)"; \
 	   $(foreach d,$(DEPS),echo "dep $(d) $($(d)_VERSION)";) \
 	   echo "cmodule rascal.build luaopen_rascal_build"; \
+	   echo "cmodule rascal.context luaopen_rascal_context"; \
 	   $(foreach m,$(ALL_CMODULES),echo "cmodule $(subst :, ,$(m))";) \
 	   $(foreach m,$(ALL_LUAMODULES),echo "lua $(subst :, ,$(m))";) \
 	 } > $@.tmp

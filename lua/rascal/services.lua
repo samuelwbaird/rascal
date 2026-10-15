@@ -1,0 +1,396 @@
+-- services — serve and connect to objects over ZeroMQ, found by name
+--
+-- local services = require('rascal.services')
+--
+-- -- in one thread, serve an object's methods
+-- local counter = { total = 0 }
+-- function counter:add(amount) self.total = self.total + amount return self.total end
+-- services.serve('counter', 'REP', { add = 'amount:number -> total:number' }, counter)
+--
+-- -- in any thread, connect by name (waiting until it is served) and call it
+-- local counter = services.connect('counter')
+-- print(counter:add(5))
+--
+-- :: socket types, given for the serving side
+--   REP    request and reply, calls block until the result (or error) returns
+--   PULL   push, calls are queued and return immediately
+--   PUB    publish, calls go to every subscriber, see services.subscribe
+--
+-- :: api descriptions, one entry per method
+--   { method_name = 'param:type, param:type -> result:type' }
+--   types are documentation only for now, values are passed by position and
+--   are limited to what cmsgpack can encode (see messaging.pack)
+--
+-- Services are served at inproc://<name> and listed in the registry, which
+-- runs in a background thread. They can also be bound to network endpoints
+-- with service:bind_network(endpoint).
+--
+-- Serving a service adds its socket to this thread's loop, so the thread
+-- keeps running to answer it (see messaging.complete).
+
+local messaging = require('rascal.messaging')
+local threads = require('rascal.threads')
+
+local log = rawget(_G, 'log') or print
+
+local services = {}
+
+local registry_name = 'rascal.registry'
+
+-- the client socket type for each serving socket type
+local client_socket_types = {
+	REP = 'REQ',
+	PULL = 'PUSH',
+	PUB = 'SUB',
+}
+
+-- method names used by service and client objects themselves
+local reserved_names = {
+	close = true,
+	bind_network = true,
+}
+
+-- api descriptions -------------------------------------------------------------------------
+
+-- parse an api description into its methods, each with its parameter names
+-- and result description
+local function parse_api(api)
+	if type(api) ~= 'table' or next(api) == nil then
+		error('services: an api description is a table of method descriptions', 3)
+	end
+	local methods = {}
+	for name, description in pairs(api) do
+		if type(name) ~= 'string' or type(description) ~= 'string' then
+			error('services: api methods must be described with strings, eg. method = \'value:string -> result:*\'', 3)
+		end
+		if reserved_names[name] then
+			error('services: ' .. name .. ' cannot be used as a method name', 3)
+		end
+		local parameters_part, result = description:match('^(.-)%s*%->%s*(.-)%s*$')
+		parameters_part = parameters_part or description
+		local parameters = {}
+		for parameter in parameters_part:gmatch('[^,]+') do
+			local parameter_name = parameter:match('^%s*([^:%s]+)')
+			if parameter_name then
+				parameters[#parameters + 1] = parameter_name
+			end
+		end
+		methods[name] = {
+			name = name,
+			description = description,
+			parameters = parameters,
+			result = result,
+		}
+	end
+	return methods
+end
+
+-- an error with its stack trace, up to where the service called the method
+local function traceback(err)
+	local trace = debug.traceback(tostring(err), 2)
+	trace = trace:gsub("\n%s*%[C%]: in function 'xpcall'.*$", '')
+	return (trace:gsub('\n%s*%(%.%.%.tail calls%.%.%.%)$', ''))
+end
+
+-- call a method on the target with packed arguments
+local function call_target(target, method, packed_args)
+	local fn = target[method]
+	if type(fn) ~= 'function' then
+		error('no method ' .. method .. ' on the served object', 0)
+	end
+	return fn(target, messaging.unpack(packed_args))
+end
+
+-- requests ---------------------------------------------------------------------------------
+
+-- send a request on a REQ socket and wait for the reply
+local function request(socket, service_name, method, ...)
+	local ok, packed = pcall(messaging.pack, ...)
+	if not ok then
+		error('services: ' .. service_name .. ':' .. method .. ' ' .. packed, 3)
+	end
+	local sent, send_error = socket:send_all({ method, packed })
+	if not sent then
+		error('services: unable to send to ' .. service_name .. ': ' .. tostring(send_error), 3)
+	end
+	local reply, receive_error = socket:recv()
+	if not reply then
+		error('services: no reply from ' .. service_name .. ': ' .. tostring(receive_error), 3)
+	end
+	local results = table.pack(messaging.unpack(reply))
+	if not results[1] then
+		error('services: ' .. service_name .. ':' .. method .. ' failed: ' .. tostring(results[2]), 3)
+	end
+	return table.unpack(results, 2, results.n)
+end
+
+-- the registry -----------------------------------------------------------------------------
+
+local registry_socket = nil
+
+-- make a request to the registry, starting it if needed. A registry thread is
+-- started from each Lua state that uses services, the first to bind the
+-- registry name runs it, and any others end straight away
+local function registry_request(method, ...)
+	if not registry_socket then
+		threads.start_background([[require('rascal.services').run_registry()]])
+		-- inproc allows connecting before the registry has bound
+		registry_socket = messaging.connect('REQ', registry_name)
+	end
+	return request(registry_socket, 'registry', method, ...)
+end
+
+-- internal, run the registry in this thread, unless one is already running
+function services.run_registry()
+	local ok, socket = pcall(messaging.bind, 'ROUTER', registry_name)
+	if not ok then
+		return
+	end
+
+	local published = {}
+	local waiting = {}
+
+	local function reply(identity, ...)
+		socket:send_all({ identity, '', messaging.pack(true, ...) })
+	end
+
+	local handlers = {}
+
+	function handlers.publish(identity, details)
+		if published[details.name] then
+			socket:send_all({ identity, '', messaging.pack(false, 'a service named ' .. details.name .. ' is already published') })
+			return
+		end
+		published[details.name] = details
+		reply(identity, true)
+		for _, waiting_identity in ipairs(waiting[details.name] or {}) do
+			reply(waiting_identity, details)
+		end
+		waiting[details.name] = nil
+	end
+
+	function handlers.unpublish(identity, name)
+		published[name] = nil
+		reply(identity, true)
+	end
+
+	-- reply with the service details, once the service is published
+	function handlers.wait(identity, name)
+		if published[name] then
+			reply(identity, published[name])
+		else
+			waiting[name] = waiting[name] or {}
+			table.insert(waiting[name], identity)
+		end
+	end
+
+	-- reply with the service details, or nil if not published
+	function handlers.find(identity, name)
+		reply(identity, published[name])
+	end
+
+	messaging.loop():add_socket(socket, function (socket)
+		-- requests from REQ sockets arrive as identity, empty delimiter, method, arguments
+		local frames = socket:recv_all()
+		local identity, method, packed_args = frames[1], frames[3], frames[4]
+		local handler = handlers[method]
+		if not handler then
+			socket:send_all({ identity, '', messaging.pack(false, 'the registry has no method ' .. tostring(method)) })
+			return
+		end
+		handler(identity, messaging.unpack(packed_args))
+	end)
+end
+
+-- wait until a service is published, returning its details
+-- (name, endpoint, socket_type for clients, api)
+function services.wait(name)
+	return registry_request('wait', name)
+end
+
+-- the details of a service if it is published, or nil
+function services.find(name)
+	return registry_request('find', name)
+end
+
+-- serving ----------------------------------------------------------------------------------
+
+local service_object = {}
+service_object.__index = service_object
+
+-- also listen on a network endpoint, eg. 'tcp://*:5555', returning the
+-- endpoint bound (with any wildcard port resolved)
+function service_object:bind_network(endpoint)
+	local ok, err = self.socket:bind(endpoint)
+	if not ok then
+		error('services: unable to bind ' .. self.name .. ' to ' .. endpoint .. ': ' .. tostring(err), 2)
+	end
+	-- lzmq includes the terminating zero byte of the endpoint
+	return (self.socket:get_last_endpoint():gsub('%z$', ''))
+end
+
+-- stop serving, and remove the service from the registry
+-- (closing from within a call to a REP service waits until it has replied)
+function service_object:close()
+	if not self.socket then
+		return
+	end
+	if self.replying then
+		self.close_after_reply = true
+		return
+	end
+	registry_request('unpublish', self.name)
+	messaging.loop():remove_socket(self.socket)
+	self.socket:close()
+	self.socket = nil
+end
+
+-- serve the methods of target as a named service, with a socket type of
+-- REP, PULL or PUB. A PUB service has no target, instead the returned
+-- service object has a method for each api method that publishes the call
+function services.serve(name, socket_type, api, target)
+	local client_socket_type = client_socket_types[socket_type]
+	if not client_socket_type then
+		error('services: services can be served with REP, PULL or PUB sockets, not ' .. tostring(socket_type), 2)
+	end
+	local methods = parse_api(api)
+	if socket_type ~= 'PUB' and type(target) ~= 'table' then
+		error('services: a ' .. socket_type .. ' service needs a target object to call', 2)
+	end
+
+	local socket = messaging.bind(socket_type, name)
+	local service = setmetatable({ name = name, socket = socket, socket_type = socket_type }, service_object)
+
+	if socket_type == 'REP' then
+		messaging.loop():add_socket(socket, function (socket)
+			local frames = socket:recv_all()
+			local method, packed_args = frames[1], frames[2]
+			service.replying = true
+			local results
+			if not methods[method] then
+				results = table.pack(false, 'no method ' .. tostring(method) .. ' in the api')
+			else
+				results = table.pack(xpcall(call_target, traceback, target, method, packed_args))
+			end
+			local ok, reply = pcall(messaging.pack, table.unpack(results, 1, results.n))
+			if not ok then
+				reply = messaging.pack(false, 'unable to return the result: ' .. reply)
+			end
+			socket:send(reply)
+			service.replying = false
+			if service.close_after_reply then
+				service:close()
+			end
+		end)
+
+	elseif socket_type == 'PULL' then
+		messaging.loop():add_socket(socket, function (socket)
+			local frames = socket:recv_all()
+			local method, packed_args = frames[1], frames[2]
+			if not methods[method] then
+				log('service ' .. name .. ' received an unknown method ' .. tostring(method))
+				return
+			end
+			local ok, err = xpcall(call_target, traceback, target, method, packed_args)
+			if not ok then
+				log('service ' .. name .. ':' .. method .. ' failed: ' .. err)
+			end
+		end)
+
+	else
+		-- PUB, a method on the service object for each api method
+		for method in pairs(methods) do
+			service[method] = function (self, ...)
+				local ok, packed = pcall(messaging.pack, ...)
+				if not ok then
+					error('services: ' .. name .. ':' .. method .. ' ' .. packed, 2)
+				end
+				self.socket:send_all({ method, packed })
+			end
+		end
+	end
+
+	registry_request('publish', {
+		name = name,
+		endpoint = messaging.inproc(name),
+		socket_type = client_socket_type,
+		api = api,
+	})
+	return service
+end
+
+-- connecting -------------------------------------------------------------------------------
+
+local client_object = {}
+client_object.__index = client_object
+
+function client_object:close()
+	if self.socket then
+		self.socket:close()
+		self.socket = nil
+	end
+end
+
+-- connect to a REP or PULL service by name, waiting until it is published,
+-- and return an object with a method for each api method
+function services.connect(name)
+	local details = services.wait(name)
+	if details.socket_type == 'SUB' then
+		error('services: ' .. name .. ' publishes, use services.subscribe', 2)
+	end
+	local socket = messaging.connect_network(details.socket_type, details.endpoint)
+	local client = setmetatable({ name = name, socket = socket, api = details.api }, client_object)
+
+	for method in pairs(parse_api(details.api)) do
+		if details.socket_type == 'REQ' then
+			client[method] = function (self, ...)
+				return request(self.socket, name, method, ...)
+			end
+		else
+			client[method] = function (self, ...)
+				local ok, packed = pcall(messaging.pack, ...)
+				if not ok then
+					error('services: ' .. name .. ':' .. method .. ' ' .. packed, 2)
+				end
+				self.socket:send_all({ method, packed })
+			end
+		end
+	end
+	return client
+end
+
+-- subscribe to a PUB service by name, waiting until it is published. Each
+-- published call is made on target, if target has that method. As with any
+-- ZeroMQ subscription, calls published before the subscription connects are
+-- not received
+function services.subscribe(name, target)
+	local details = services.wait(name)
+	if details.socket_type ~= 'SUB' then
+		error('services: ' .. name .. ' does not publish, use services.connect', 2)
+	end
+	local methods = parse_api(details.api)
+	local socket = messaging.connect_network('SUB', details.endpoint)
+	socket:subscribe('')
+	messaging.loop():add_socket(socket, function (socket)
+		local frames = socket:recv_all()
+		local method, packed_args = frames[1], frames[2]
+		if methods[method] and type(target[method]) == 'function' then
+			local ok, err = xpcall(call_target, traceback, target, method, packed_args)
+			if not ok then
+				log('subscriber to ' .. name .. ':' .. method .. ' failed: ' .. err)
+			end
+		end
+	end)
+	local subscription = setmetatable({ name = name, socket = socket }, client_object)
+	-- closing a subscription also removes it from the loop
+	function subscription:close()
+		if self.socket then
+			messaging.loop():remove_socket(self.socket)
+			self.socket:close()
+			self.socket = nil
+		end
+	end
+	return subscription
+end
+
+return services

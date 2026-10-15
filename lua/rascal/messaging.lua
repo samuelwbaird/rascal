@@ -18,6 +18,7 @@
 local zmq = require('lzmq')
 local zloop = require('lzmq.loop')
 local ztimer = require('lzmq.timer')
+local cmsgpack = require('cmsgpack')
 
 local messaging = {}
 
@@ -29,20 +30,13 @@ messaging.zmq = zmq
 local context = nil
 local loop = nil
 
--- the process wide context, created on first use in the main thread
+-- the process wide context, shared by every thread. It is never terminated,
+-- so threads are not interrupted as others end, and the process ends promptly
 function messaging.context()
 	if not context then
-		context = zmq.context()
+		context = zmq.init_ctx(require('rascal.context'))
 	end
 	return context
-end
-
--- used by rascal.threads, so a new thread uses the context of its parent
-function messaging.set_context(context_pointer)
-	if context then
-		error('messaging: the context is already set for this thread', 2)
-	end
-	context = zmq.init_ctx(context_pointer)
 end
 
 -- the loop for this thread, created on first use
@@ -56,6 +50,42 @@ end
 -- utc time in seconds, with fractions
 function messaging.utc_time()
 	return ztimer.absolute_time() / 1000
+end
+
+-- values -----------------------------------------------------------------------------------
+
+-- values passed between threads are limited to what cmsgpack can encode:
+-- nil, booleans, numbers, strings and tables of those
+
+local function check_value(value, seen)
+	local value_type = type(value)
+	if value_type == 'table' then
+		if seen[value] then
+			error('messaging: cannot pass a table that contains itself', 0)
+		end
+		seen[value] = true
+		for k, v in pairs(value) do
+			check_value(k, seen)
+			check_value(v, seen)
+		end
+		seen[value] = nil
+	elseif value_type ~= 'nil' and value_type ~= 'boolean' and value_type ~= 'number' and value_type ~= 'string' then
+		error('messaging: cannot pass a ' .. value_type, 0)
+	end
+end
+
+-- pack any number of values into a string, raising an error for values
+-- that cannot be passed between threads
+function messaging.pack(...)
+	local values = table.pack(...)
+	check_value(values, {})
+	return cmsgpack.pack(values)
+end
+
+-- the values from messaging.pack
+function messaging.unpack(packed)
+	local values = cmsgpack.unpack(packed)
+	return table.unpack(values, 1, values.n)
 end
 
 -- sockets ----------------------------------------------------------------------------------

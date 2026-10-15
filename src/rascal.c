@@ -2,8 +2,11 @@
 ** rascal — opening Lua states with the compiled in and embedded modules
 */
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "zmq.h"
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -116,6 +119,29 @@ int rascal_push_complete (lua_State *L) {
   }
   lua_pop(L, 2);
   return 0;
+}
+
+
+/*
+** require 'rascal.context' — the process wide ZeroMQ context, as a
+** lightuserdata for lzmq's zmq.init_ctx. It is created once and never
+** terminated, so ending any Lua state (or the process) never blocks on, or
+** interrupts, sockets in other threads.
+*/
+
+static void *zmq_context = NULL;
+static pthread_once_t zmq_context_once = PTHREAD_ONCE_INIT;
+
+static void create_zmq_context (void) {
+  zmq_context = zmq_ctx_new();
+}
+
+int luaopen_rascal_context (lua_State *L) {
+  pthread_once(&zmq_context_once, create_zmq_context);
+  if (zmq_context == NULL)
+    return luaL_error(L, "unable to create the ZeroMQ context: %s", zmq_strerror(zmq_errno()));
+  lua_pushlightuserdata(L, zmq_context);
+  return 1;
 }
 
 
