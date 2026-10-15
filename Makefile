@@ -134,7 +134,7 @@ $(GEN)/modules.c: $(GEN)/modules.list tools/embed.lua $(ALL_LUAFILES) $(HOST_LUA
 	@$(HOST_LUA) tools/embed.lua $(GEN)/modules.list $@
 
 # a plain Lua interpreter used to run build tools written in Lua
-$(HOST_LUA): $(OBJ)/host/lua.o $(lua_OBJS)
+$(HOST_LUA): $(OBJ)/host/lua.o $(OBJ)/host/host_stub.o $(lua_OBJS)
 	@mkdir -p $(@D)
 	@echo "  LINK  $@"
 	@$(CC) -o $@ $^ $(LDFLAGS) $(HOST_LIBS)
@@ -143,6 +143,11 @@ $(OBJ)/host/lua.o: $(SRC)/lua/src/lua.c config.mk $(ALL_STAMPS)
 	@mkdir -p $(@D)
 	@echo "  CC    host/lua.c"
 	@$(COMPILE_DEP) -MMD -MP -c $< -o $@
+
+$(OBJ)/host/host_stub.o: tools/host_stub.c config.mk $(ALL_STAMPS)
+	@mkdir -p $(@D)
+	@echo "  CC    tools/host_stub.c"
+	@$(COMPILE_RASCAL) -MMD -MP -c $< -o $@
 
 -include $(OBJ)/host/lua.d
 

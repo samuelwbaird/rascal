@@ -22,6 +22,8 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
 | `prelude` | [prelude](https://github.com/samuelwbaird/prelude), embedded from `lua/` | |
 | `rascal.database` | simple SQLite access over lsqlite3, embedded from `lua/rascal/database.lua` | |
 | `rascal.stowage` | key value store with a log and reverse index per key, over `rascal.database` | |
+| `rascal.messaging` | the shared ZeroMQ context, a loop per thread, inproc sockets by name | |
+| `rascal.threads` | start threads from Lua source with arguments | |
 | `rascal.build` | build information, see below | |
 
 `make info` lists the pinned versions.
@@ -31,6 +33,11 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
 `rascal` is the standard Lua interpreter (`lua.c`), so `rascal script.lua`, `rascal -e`, `rascal -l` and the REPL all work as usual.
 
 - **Init script**: every Lua state first runs the embedded `init` module, `lua/init.lua`. It currently makes prelude global (`require('prelude').global()`), so `class`, `list` and friends are available everywhere, and defines a global `log(...)` that writes a timestamped line to stderr. It runs before `RASCAL_INIT`, `-e`, `-l` and the script, and before the global `arg` table exists. Start rascal with `--no-init` to skip it, in threads too. `--no-init` must come before the script name; after it, it is passed to the script like any other argument. It doesn't affect `RASCAL_INIT`, which is skipped with `-E` as in standard Lua. If the init script fails, rascal exits with the error. A failure inside a thread aborts the whole process.
+- **Threads and messaging**:
+  - **Starting threads:** `require('rascal.threads').start(code, ...)` runs a string of Lua source in a new thread, with the arguments as `...`. Arguments are limited to what cmsgpack can encode. Threads don't return values; results are sent back over ZeroMQ.
+  - **Sockets:** every thread shares one ZeroMQ context. `rascal.messaging` names sockets as inproc endpoints by default, eg. `messaging.bind('PULL', 'jobs')`, with `bind_network` and `connect_network` for anything else.
+  - **Running to completion:** once a thread's code, or the main script, is complete, its loop (`messaging.loop()`) runs until it has no sockets or timers and every thread it started has finished, then exits. A socket stays in the loop until it is removed with `loop:remove_socket`.
+  - **Failures:** a thread that fails reports its error with `log` and ends.
 - **Modules**: compiled in C modules are registered in `package.preload`. Embedded Lua modules are found by a searcher placed right after it, so they take priority over files on disk.
 - **Threads**: every Lua state rascal creates gets the same modules, including each `llthreads2` / `lzmq.threads` thread. Thread code can `require` anything the main state can.
 - **Environment**: rascal ignores `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`, so it is isolated from any other Lua installation. Use `RASCAL_PATH`, `RASCAL_CPATH` and `RASCAL_INIT` instead. The default path is only `./?.lua;./?/init.lua`.

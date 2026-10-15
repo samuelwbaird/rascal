@@ -1,0 +1,28 @@
+Once the script, -e, -l, stdin and any interactive session are complete,
+call rascal_push_complete, and if it pushes a function run it like the
+script (with a traceback on error and Ctrl-C handling). rascal uses this to
+run the main thread's ZeroMQ loop until all of its work is complete.
+
+--- a/src/lua.c	2026-10-15 23:58:57
++++ b/src/lua.c	2026-10-15 23:58:57
+@@ -623,6 +623,9 @@
+ ** Main body of stand-alone interpreter (to be called in protected mode).
+ ** Reads the options and handles them all.
+ */
++/* rascal: pushes the function to run once the script is complete, if any */
++int rascal_push_complete (lua_State *L);
++
+ static int pmain (lua_State *L) {
+   int argc = (int)lua_tointeger(L, 1);
+   char **argv = (char **)lua_touserdata(L, 2);
+@@ -663,6 +666,10 @@
+     }
+     else dofile(L, NULL);  /* executes stdin as a file */
+   }
++  if (rascal_push_complete(L)) {  /* rascal: run until complete */
++    if (report(L, docall(L, 0, 0)) != LUA_OK)
++      return 0;
++  }
+   lua_pushboolean(L, 1);  /* signal no errors */
+   return 1;
+ }

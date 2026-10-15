@@ -98,6 +98,28 @@ void rascal_openlibs (lua_State *L) {
 
 
 /*
+** Called by the interpreter (see patches/lua) once the script is complete.
+** If rascal.messaging has been loaded, push its complete function to run
+** this thread's loop until all of its work is done.
+*/
+int rascal_push_complete (lua_State *L) {
+  lua_getfield(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
+  lua_getfield(L, -1, "rascal.messaging");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "complete");
+    if (lua_isfunction(L, -1)) {
+      lua_replace(L, -3);
+      lua_pop(L, 1);
+      return 1;
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 2);
+  return 0;
+}
+
+
+/*
 ** require 'rascal.build' — what this executable was built with
 */
 

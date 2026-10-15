@@ -10,6 +10,28 @@ function expect_equal(actual, expected, message)
 	end
 end
 
+-- run this rascal executable with a command line, returning its output
+-- (stdout and stderr), with log timestamps removed
+local rascal_executable = arg[-1]
+function run_rascal(command_line)
+	local p = assert(io.popen(rascal_executable .. ' ' .. command_line .. ' 2>&1'))
+	local output = p:read('a')
+	p:close()
+	output = output:gsub('%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d ', '')
+	return (output:gsub('%s+$', ''))
+end
+
+-- run Lua source as a script in a separate rascal process
+function run_rascal_script(source, options)
+	local path = os.tmpname()
+	local f = assert(io.open(path, 'w'))
+	f:write(source)
+	f:close()
+	local output = run_rascal((options or '') .. ' ' .. path)
+	os.remove(path)
+	return output
+end
+
 local paths = { table.unpack(arg) }
 if #paths == 0 then
 	local lfs = require('lfs')

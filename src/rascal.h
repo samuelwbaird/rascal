@@ -54,4 +54,7 @@ void rascal_openlibs (lua_State *L);
 /* require 'rascal.build', listed in modules.c with the other C modules */
 int luaopen_rascal_build (lua_State *L);
 
+/* see patches/lua, pushes rascal.messaging.complete if that module is loaded */
+int rascal_push_complete (lua_State *L);
+
 #endif
