@@ -70,7 +70,10 @@ src/                rascal's own C: command line, opening Lua states, the embedd
 tools/embed.lua     generates the C tables of modules from the build
 scripts/            fetching, linkage checks, container builds
 docker/             Linux build environments
-tests/              test suite, run with make test
+tests/              test suite, run with make test (or rascal tests/run.lua [files])
+  dependencies/     the third party libraries compiled in
+  rascal/           rascal's own libraries
+  examples/         complete example programs of threads and services, each run as its own process
 build/              all output (ignored): build/downloads and build/<platform>/
 ```
 

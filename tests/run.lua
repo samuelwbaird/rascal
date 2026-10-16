@@ -1,7 +1,20 @@
--- minimal test runner
---   rascal tests/run.lua                      runs every test_*.lua beside this file
---   rascal tests/run.lua tests/test_zmq.lua   runs just the given test files
--- each test file is a plain script, a test fails if it raises an error
+-- test runner
+--   rascal tests/run.lua                                runs every test
+--   rascal tests/run.lua tests/rascal/database.lua      runs just the given tests
+--
+-- tests are grouped in folders beside this file:
+--   dependencies/   the third party libraries compiled into rascal
+--   rascal/         rascal's own libraries
+--   examples/       example programs, showing patterns of threads and services
+--
+-- dependency and library tests are plain scripts run in this process, and
+-- fail if they raise an error. Examples are complete programs, each run in
+-- its own rascal process (as they rely on running to completion), and fail
+-- if that process does not exit successfully.
+
+local lfs = require('lfs')
+
+local categories = { 'dependencies', 'rascal', 'examples' }
 
 function expect_equal(actual, expected, message)
 	if actual ~= expected then
@@ -11,14 +24,14 @@ function expect_equal(actual, expected, message)
 end
 
 -- run this rascal executable with a command line, returning its output
--- (stdout and stderr), with log timestamps removed
+-- (stdout and stderr) with log timestamps removed, and whether it succeeded
 local rascal_executable = arg[-1]
 function run_rascal(command_line)
 	local p = assert(io.popen(rascal_executable .. ' ' .. command_line .. ' 2>&1'))
 	local output = p:read('a')
-	p:close()
+	local success = p:close()
 	output = output:gsub('%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d ', '')
-	return (output:gsub('%s+$', ''))
+	return (output:gsub('%s+$', '')), success == true
 end
 
 -- run Lua source as a script in a separate rascal process
@@ -27,35 +40,55 @@ function run_rascal_script(source, options)
 	local f = assert(io.open(path, 'w'))
 	f:write(source)
 	f:close()
-	local output = run_rascal((options or '') .. ' ' .. path)
+	local output, success = run_rascal((options or '') .. ' ' .. path)
 	os.remove(path)
-	return output
+	return output, success
 end
 
+-- find every test, or use those given
+local tests_dir = arg[0]:match('^(.*)/[^/]*$') or '.'
 local paths = { table.unpack(arg) }
 if #paths == 0 then
-	local lfs = require('lfs')
-	local dir = arg[0]:match('^(.*)/[^/]*$') or '.'
-	for name in lfs.dir(dir) do
-		if name:match('^test_.*%.lua$') then
-			paths[#paths + 1] = dir .. '/' .. name
+	for _, category in ipairs(categories) do
+		local found = {}
+		for name in lfs.dir(tests_dir .. '/' .. category) do
+			if name:match('%.lua$') then
+				found[#found + 1] = tests_dir .. '/' .. category .. '/' .. name
+			end
 		end
+		table.sort(found)
+		table.move(found, 1, #found, #paths + 1, paths)
 	end
-	table.sort(paths)
+end
+
+local function run_test(path)
+	if path:find('examples/', 1, true) then
+		local output, success = run_rascal(path)
+		if not success then
+			-- the example's own output explains the failure, without a traceback here
+			error({ example_output = output })
+		end
+	else
+		dofile(path)
+	end
 end
 
 local failed = 0
 for _, path in ipairs(paths) do
-	local name = path:match('([^/]+)%.lua$') or path
-	local started = os.clock()
-	local ok, err = xpcall(dofile, debug.traceback, path)
+	local name = path:match('([^/]+/[^/]+)%.lua$') or path
+	local ok, err = xpcall(run_test, function (err)
+		if type(err) == 'table' and err.example_output then
+			return 'example failed:\n' .. err.example_output
+		end
+		return debug.traceback(err, 2)
+	end, path)
 	if ok then
-		print(string.format('  ok    %-20s %.2fs', name, os.clock() - started))
+		print('  ok    ' .. name)
 	else
 		failed = failed + 1
-		print(string.format('  FAIL  %s\n%s', name, err))
+		print('  FAIL  ' .. name .. '\n' .. err)
 	end
 end
 
-print(string.format('%d of %d test files passed', #paths - failed, #paths))
+print(string.format('%d of %d tests passed', #paths - failed, #paths))
 os.exit(failed == 0 and 0 or 1)

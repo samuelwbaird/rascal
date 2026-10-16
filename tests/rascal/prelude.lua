@@ -28,3 +28,11 @@ expect_equal(wrapped:pop(), 'b')
 local packed = prelude.list.pack(1, 2, 3)
 expect_equal(getmetatable(packed), prelude.list)
 expect_equal(#packed, 3)
+
+-- random returns an item and its index, or nil when empty
+local picks = prelude.list({ 'a', 'b', 'c' })
+local item, index = picks:random()
+expect_equal(picks[index], item)
+picks:remove(index)
+expect_equal(#picks, 2)
+expect_equal(prelude.list():random(), nil)

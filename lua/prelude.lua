@@ -280,11 +280,18 @@ function prelude.list:with_each(fn)
 	end
 end
 
---- Return a random member of the list
+--- Return a random member of the list, and its index
 -- @function list:random
--- @return A random member of the list, or nil if empty
+-- @return A random member of the list and its index, or nil if empty
+-- @usage
+-- local item, index = my_list:random()
+-- my_list:remove(index)
 function prelude.list:random()
-	return #self > 0 and self[math.random(#self)]
+	if #self == 0 then
+		return nil
+	end
+	local index = math.random(#self)
+	return self[index], index
 end
 
 --- Destructively shuffle the order of the list
