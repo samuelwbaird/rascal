@@ -20,7 +20,6 @@
 
 local services = require('rascal.services')
 local threads = require('rascal.threads')
-local messaging = require('rascal.messaging')
 
 local job_count = 10000
 local worker_count = 2
@@ -69,7 +68,7 @@ results_service = services.serve('work_queue.results', 'PULL', {
 }, results)
 
 -- as this is also a test, give up if it takes too long
-deadline = messaging.loop():add_once(60000, function ()
+deadline = loop:add_once(60000, function ()
 	log('timed out with ' .. results.count .. ' of ' .. job_count .. ' jobs completed')
 	os.exit(1)
 end)
@@ -137,21 +136,22 @@ threads.start([==[
 		threads.start([=[
 			local name = ...
 			local services = require('rascal.services')
-			local messaging = require('rascal.messaging')
 			local jobs = services.connect('work_queue.jobs')
 			local results = services.connect('work_queue.results')
 
-			while true do
-				local job, status = jobs:next_job()
-				if job then
-					results:completed(name, job.id, job.id * job.id)
-				elseif status == 'wait' then
-					-- nothing queued yet
-					messaging.loop():sleep_ex(5)
-				else
-					break
+			loop:schedule(function ()
+				while true do
+					local job, status = jobs:next_job()
+					if job then
+						results:completed(name, job.id, job.id * job.id)
+					elseif status == 'wait' then
+						-- nothing queued yet
+						coroutine.yield(5)
+					else
+						break
+					end
 				end
-			end
+			end)
 		]=], 'worker ' .. i)
 	end
 ]==], worker_count)

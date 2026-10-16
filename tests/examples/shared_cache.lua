@@ -91,7 +91,6 @@ local cache_client_source = [==[
 local cache_server_thread = [==[
 	local run_milliseconds = ...
 	local services = require('rascal.services')
-	local loop = require('rascal.messaging').loop()
 
 	local cache = {
 		entries = {},
@@ -124,7 +123,8 @@ local cache_server_thread = [==[
 	})
 
 	-- stop serving once the editor and workers are done
-	loop:add_once(run_milliseconds + 500, function ()
+	loop:schedule(function ()
+		coroutine.yield(run_milliseconds + 500)
 		update_service:close()
 		get_service:close()
 		invalidate:close()
@@ -136,7 +136,7 @@ local cache_server_thread = [==[
 local editor_thread = [==[
 	local cache_client_source, pages, run_milliseconds = ...
 	local prelude = require('prelude')
-	local loop = require('rascal.messaging').loop()
+	local messaging = require('rascal.messaging')
 
 	local cache_client = load(cache_client_source, '=cache_client')()
 	local cache = cache_client()
@@ -154,23 +154,24 @@ local editor_thread = [==[
 	end
 
 	-- publish every page, then keep editing pages, occasionally taking the news down for a while
-	for _, path in ipairs(pages) do
-		render(path)
-	end
-
-	local edits = 0
-	local edit_timer = loop:add_interval(100, function ()
-		local path = prelude.list(pages):random()
-		if path == '/news' and math.random(1, 4) == 1 then
-			cache:clear(path)
-		else
+	loop:schedule(function ()
+		for _, path in ipairs(pages) do
 			render(path)
 		end
-		edits = edits + 1
-	end)
 
-	loop:add_once(run_milliseconds, function ()
-		edit_timer:reset()
+		local edits = 0
+		local finish = messaging.utc_time() + run_milliseconds / 1000
+		while messaging.utc_time() < finish do
+			coroutine.yield(100)
+			local path = prelude.list(pages):random()
+			if path == '/news' and math.random(1, 4) == 1 then
+				cache:clear(path)
+			else
+				render(path)
+			end
+			edits = edits + 1
+		end
+
 		log('editor made ' .. edits .. ' edits')
 		cache:close()
 	end)
@@ -181,24 +182,25 @@ local editor_thread = [==[
 local web_worker_thread = [==[
 	local name, cache_client_source, pages, run_milliseconds = ...
 	local prelude = require('prelude')
-	local loop = require('rascal.messaging').loop()
+	local messaging = require('rascal.messaging')
 
 	local cache_client = load(cache_client_source, '=cache_client')()
 	local cache = cache_client()
 	local paths = prelude.list(pages)
 	local served, not_found = 0, 0
 
-	local request_timer = loop:add_interval(2, function ()
-		local page = cache:get(paths:random())
-		if page then
-			served = served + 1
-		else
-			not_found = not_found + 1
+	loop:schedule(function ()
+		local finish = messaging.utc_time() + run_milliseconds / 1000
+		while messaging.utc_time() < finish do
+			coroutine.yield(2)
+			local page = cache:get(paths:random())
+			if page then
+				served = served + 1
+			else
+				not_found = not_found + 1
+			end
 		end
-	end)
 
-	loop:add_once(run_milliseconds, function ()
-		request_timer:reset()
 		log(name .. ' served ' .. served .. ' pages (' .. not_found .. ' not found), '
 			.. cache.from_client .. ' from its own cache, '
 			.. cache.from_server .. ' from the cache server')

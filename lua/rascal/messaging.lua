@@ -12,6 +12,9 @@
 -- Endpoints are inproc names by default, network endpoints are used only
 -- through the explicit bind_network and connect_network.
 --
+-- loop:schedule(fn, ...) runs a function as a coroutine on the loop, which
+-- can wait with coroutine.yield(milliseconds), see schedule below.
+--
 -- When a thread's code is complete (including the main script) its loop is
 -- run, until it has no sockets or timers and no other work, see complete()
 
@@ -39,10 +42,35 @@ function messaging.context()
 	return context
 end
 
+-- loop:schedule(fn, ...) runs fn(...) as a coroutine on the loop. Within it
+-- coroutine.yield(milliseconds) resumes it after that many milliseconds, and
+-- coroutine.yield() resumes it on the next turn of the loop, letting other
+-- sockets and timers run. Errors are raised as from any loop callback, and
+-- a waiting coroutine keeps the loop running, as its timer does
+local function schedule(loop, fn, ...)
+	local co = coroutine.create(fn)
+	local function resume(...)
+		local ok, delay = coroutine.resume(co, ...)
+		if not ok then
+			error(debug.traceback(co, delay), 0)
+		end
+		if coroutine.status(co) == 'dead' then
+			return
+		end
+		if delay ~= nil and (type(delay) ~= 'number' or delay < 0) then
+			error('messaging: a scheduled coroutine can yield a number of milliseconds, or nothing', 0)
+		end
+		loop:add_once(delay or 0, function () resume() end)
+	end
+	resume(...)
+	return co
+end
+
 -- the loop for this thread, created on first use
 function messaging.loop()
 	if not loop then
 		loop = zloop.new(messaging.context())
+		loop.schedule = schedule
 	end
 	return loop
 end

@@ -74,3 +74,34 @@ expect_equal(run_rascal_script([[
 
 -- scripts that never load messaging are unaffected
 expect_equal(run_rascal_script([[print('plain')]]), 'plain')
+
+-- loop:schedule runs a function as a coroutine, which waits by yielding milliseconds
+expect_equal(loop, messaging.loop(), 'init sets loop as a global')
+local steps = {}
+loop:schedule(function (label)
+	steps[#steps + 1] = label .. ' started'
+	coroutine.yield(20)
+	steps[#steps + 1] = label .. ' after 20ms'
+	coroutine.yield()
+	steps[#steps + 1] = label .. ' after a turn of the loop'
+end, 'first')
+expect_equal(table.concat(steps, ', '), 'first started', 'runs straight away, until it first yields')
+loop:sleep_ex(100)
+expect_equal(table.concat(steps, ', '), 'first started, first after 20ms, first after a turn of the loop')
+
+-- errors are raised with the coroutine's stack trace
+expect_error('scheduled failure', loop.schedule, loop, function () error('scheduled failure') end)
+expect_error('can yield a number of milliseconds', loop.schedule, loop, function () coroutine.yield('soon') end)
+
+-- coroutines interleave, and keep the thread running until they are complete
+expect_equal(run_rascal_script([[
+	for _, name in ipairs({ 'a', 'b' }) do
+		loop:schedule(function ()
+			for i = 1, 3 do
+				print(name .. i)
+				coroutine.yield(name == 'a' and 10 or 100)
+			end
+		end)
+	end
+	print('script done')
+]]), 'a1\nb1\nscript done\na2\na3\nb2\nb3')

@@ -14,9 +14,12 @@
 -- any leaderboard that arrives before it has a name. The leaderboard is the
 -- whole state, so one missed or ignored is replaced by the next.
 --
--- The game ends on a timer: the server publishes game over and closes its
--- services, and each client stops when it sees game over, so every thread
--- completes and the process exits.
+-- The server's frames, and each client's play, are each a loop in a coroutine
+-- (see loop:schedule), waiting between steps with coroutine.yield(milliseconds).
+--
+-- The game ends after a set number of frames: the server publishes game over
+-- and closes its services, and each client stops when it sees game over, so
+-- every thread completes and the process exits.
 
 local threads = require('rascal.threads')
 
@@ -30,7 +33,6 @@ local game_world_thread = [==[
 	local frames_per_second, game_seconds = ...
 	local prelude = require('prelude')
 	local services = require('rascal.services')
-	local loop = require('rascal.messaging').loop()
 
 	local world = {
 		scores = {},
@@ -86,14 +88,12 @@ local game_world_thread = [==[
 		leaderboard_service:leaderboard(self:leaderboard())
 	end
 
-	local frame_timer = loop:add_interval(1000 // frames_per_second, function ()
-		world:update_frame()
-	end)
-
-	-- end the game, with any last input, then stop serving
-	loop:add_once(game_seconds * 1000, function ()
-		world:update_frame()
-		frame_timer:reset()
+	-- run the frames for the length of the game, then end it and stop serving
+	loop:schedule(function ()
+		for frame = 1, game_seconds * frames_per_second do
+			coroutine.yield(1000 // frames_per_second)
+			world:update_frame()
+		end
 		leaderboard_service:game_over(world:leaderboard())
 		log('game over')
 		join_service:close()
@@ -107,12 +107,12 @@ local game_world_thread = [==[
 local game_client_thread = [==[
 	local join_delay, input_interval = ...
 	local services = require('rascal.services')
-	local loop = require('rascal.messaging').loop()
 
 	local client = {
 		name = nil,
+		playing = true,
 	}
-	local subscription, input, input_timer
+	local subscription
 
 	function client:show(leaderboard, label)
 		local entries = {}
@@ -130,15 +130,16 @@ local game_client_thread = [==[
 	end
 
 	function client:game_over(leaderboard)
+		self.playing = false
 		subscription:close()
 		if self.name then
-			input_timer:reset()
 			self:show(leaderboard, 'final scores ')
 		end
 	end
 
 	-- join after a delay, then send input until the game is over
-	loop:add_once(join_delay, function ()
+	loop:schedule(function ()
+		coroutine.yield(join_delay)
 		subscription = services.subscribe('game_world.leaderboard', client)
 
 		local join = services.connect('game_world.join')
@@ -147,10 +148,11 @@ local game_client_thread = [==[
 		client.name = name
 		client:show(leaderboard)
 
-		input = services.connect('game_world.input')
-		input_timer = loop:add_interval(input_interval, function ()
+		local input = services.connect('game_world.input')
+		while client.playing do
 			input:add_points(client.name, math.random(1, 10))
-		end)
+			coroutine.yield(input_interval)
+		end
 	end)
 ]==]
 

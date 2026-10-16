@@ -17,3 +17,6 @@ function log(...)
 	-- a single write, so lines from different threads don't interleave
 	io.stderr:write(table.concat(parts, ' ') .. '\n')
 end
+
+-- loop, this thread's messaging loop, for sockets, timers and loop:schedule
+loop = require('rascal.messaging').loop()
