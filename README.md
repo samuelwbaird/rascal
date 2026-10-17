@@ -41,8 +41,9 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
   - **Coroutines:** `loop:schedule(fn, ...)` runs a function as a coroutine on the loop. Inside it, `coroutine.yield(milliseconds)` waits that long and `coroutine.yield()` waits for one turn of the loop, so timed sequences and repeating loops read as straight-line code.
   - **Failures:** a thread that fails reports its error with `log` and ends.
   - **Background threads:** `threads.start_background(code, ...)` starts a thread that its parent doesn't wait for, for long-running work that ends with the process.
-  - **Services:** `rascal.services` serves an object's methods by name with `services.serve(name, 'REP' | 'PULL' | 'PUB', api, target)`. Any thread can then call `services.connect(name)` or `services.subscribe(name, target)`, which wait until the service is served. The api is described with strings, eg. `{ add = 'amount:number -> total:number' }`, and values are passed by position.
-    - Errors in a REP method are raised in the caller.
+  - **Services:** `rascal.services` serves an object's methods by name with `services.serve(name, 'REP' | 'ROUTER' | 'PULL' | 'PUB', api, target)`. Any thread can then call `services.connect(name)` or `services.subscribe(name, target)`, which wait until the service is served. The api is described with strings, eg. `{ add = 'amount:number -> total:number' }`, and values are passed by position.
+    - A ROUTER service is called the same way as REP, but each call runs as a coroutine, so a method can yield (eg. `coroutine.yield(milliseconds)`). Calls from different callers can then be in progress at the same time, and each is replied to when it completes.
+    - Errors in a REP or ROUTER method are raised in the caller.
     - Services are listed in a registry that runs in a background thread.
     - `service:bind_network(endpoint)` also makes a service reachable over the network.
   - **Process exit:** the ZeroMQ context is shared by every thread and is never terminated, so a thread ending never interrupts sockets in other threads, and the process exits promptly.

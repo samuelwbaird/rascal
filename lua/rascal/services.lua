@@ -13,6 +13,9 @@
 --
 -- :: socket types, given for the serving side
 --   REP    request and reply, calls block until the result (or error) returns
+--   ROUTER as REP for the caller, but each call runs as a coroutine (see
+--          loop:schedule), so a method can yield, and calls in progress at the
+--          same time are each replied to when they complete
 --   PULL   push, calls are queued and return immediately
 --   PUB    publish, calls go to every subscriber, see services.subscribe
 --
@@ -40,6 +43,7 @@ local registry_name = 'rascal.registry'
 -- the client socket type for each serving socket type
 local client_socket_types = {
 	REP = 'REQ',
+	ROUTER = 'REQ',
 	PULL = 'PUSH',
 	PUB = 'SUB',
 }
@@ -230,13 +234,13 @@ function service_object:bind_network(endpoint)
 end
 
 -- stop serving, and remove the service from the registry
--- (closing from within a call to a REP service waits until it has replied)
+-- (for REP and ROUTER services, closing waits until calls in progress have replied)
 function service_object:close()
 	if not self.socket then
 		return
 	end
-	if self.replying then
-		self.close_after_reply = true
+	if self.calls_in_progress > 0 then
+		self.close_when_complete = true
 		return
 	end
 	registry_request('unpublish', self.name)
@@ -245,13 +249,22 @@ function service_object:close()
 	self.socket = nil
 end
 
+-- the reply to a request, from the results of xpcall
+local function pack_reply(results)
+	local ok, reply = pcall(messaging.pack, table.unpack(results, 1, results.n))
+	if not ok then
+		return messaging.pack(false, 'unable to return the result: ' .. reply)
+	end
+	return reply
+end
+
 -- serve the methods of target as a named service, with a socket type of
--- REP, PULL or PUB. A PUB service has no target, instead the returned
+-- REP, ROUTER, PULL or PUB. A PUB service has no target, instead the returned
 -- service object has a method for each api method that publishes the call
 function services.serve(name, socket_type, api, target)
 	local client_socket_type = client_socket_types[socket_type]
 	if not client_socket_type then
-		error('services: services can be served with REP, PULL or PUB sockets, not ' .. tostring(socket_type), 2)
+		error('services: services can be served with REP, ROUTER, PULL or PUB sockets, not ' .. tostring(socket_type), 2)
 	end
 	local methods = parse_api(api)
 	if socket_type ~= 'PUB' and type(target) ~= 'table' then
@@ -259,28 +272,59 @@ function services.serve(name, socket_type, api, target)
 	end
 
 	local socket = messaging.bind(socket_type, name)
-	local service = setmetatable({ name = name, socket = socket, socket_type = socket_type }, service_object)
+	local service = setmetatable({
+		name = name,
+		socket = socket,
+		socket_type = socket_type,
+		calls_in_progress = 0,
+	}, service_object)
+
+	local function call_complete()
+		service.calls_in_progress = service.calls_in_progress - 1
+		if service.close_when_complete and service.calls_in_progress == 0 then
+			service:close()
+		end
+	end
 
 	if socket_type == 'REP' then
 		messaging.loop():add_socket(socket, function (socket)
 			local frames = socket:recv_all()
 			local method, packed_args = frames[1], frames[2]
-			service.replying = true
+			service.calls_in_progress = service.calls_in_progress + 1
 			local results
 			if not methods[method] then
 				results = table.pack(false, 'no method ' .. tostring(method) .. ' in the api')
 			else
 				results = table.pack(xpcall(call_target, traceback, target, method, packed_args))
 			end
-			local ok, reply = pcall(messaging.pack, table.unpack(results, 1, results.n))
-			if not ok then
-				reply = messaging.pack(false, 'unable to return the result: ' .. reply)
+			socket:send(pack_reply(results))
+			call_complete()
+		end)
+
+	elseif socket_type == 'ROUTER' then
+		messaging.loop():add_socket(socket, function (socket)
+			-- requests from REQ sockets arrive as the routing envelope, an empty
+			-- delimiter, then the method and arguments
+			local frames = socket:recv_all()
+			local envelope = {}
+			while #frames > 0 and frames[1] ~= '' do
+				envelope[#envelope + 1] = table.remove(frames, 1)
 			end
-			socket:send(reply)
-			service.replying = false
-			if service.close_after_reply then
-				service:close()
-			end
+			local method, packed_args = frames[2], frames[3]
+			envelope[#envelope + 1] = ''
+
+			service.calls_in_progress = service.calls_in_progress + 1
+			messaging.loop():schedule(function ()
+				local results
+				if not methods[method] then
+					results = table.pack(false, 'no method ' .. tostring(method) .. ' in the api')
+				else
+					results = table.pack(xpcall(call_target, traceback, target, method, packed_args))
+				end
+				envelope[#envelope + 1] = pack_reply(results)
+				service.socket:send_all(envelope)
+				call_complete()
+			end)
 		end)
 
 	elseif socket_type == 'PULL' then
