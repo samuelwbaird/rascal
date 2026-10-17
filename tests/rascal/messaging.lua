@@ -105,3 +105,113 @@ expect_equal(run_rascal_script([[
 	end
 	print('script done')
 ]]), 'a1\nb1\nscript done\na2\na3\nb2\nb3')
+
+-- loop:suspend parks a coroutine, by default against itself, until loop:resume
+local events = {}
+local parked_co = loop:schedule(function ()
+	local value = loop:suspend()
+	events[#events + 1] = 'resumed with ' .. value
+	coroutine.yield()
+	events[#events + 1] = 'after a turn of the loop'
+end)
+expect_equal(#events, 0, 'parked')
+expect_equal(loop:resume(parked_co, 'first'), 1)
+expect_equal(table.concat(events, ', '), 'resumed with first', 'resumed straight away, up to its next yield')
+expect_equal(loop:resume(parked_co, 'again'), 0, 'each suspend is resumed only once')
+loop:sleep_ex(20)
+expect_equal(table.concat(events, ', '), 'resumed with first, after a turn of the loop')
+
+-- every coroutine parked against a key is woken, and cleared from it
+local token = {}
+local woken = {}
+for _, name in ipairs({ 'a', 'b' }) do
+	loop:schedule(function ()
+		local x, y = loop:suspend(token)
+		woken[#woken + 1] = name .. x .. y
+	end)
+end
+expect_equal(loop:resume(token, 1, 2), 2)
+expect_equal(table.concat(woken, ', '), 'a12, b12')
+expect_equal(loop:resume(token), 0)
+expect_equal(loop:resume('nothing parked here'), 0, 'a resume with nothing parked does nothing')
+
+-- waiting on shared state: check again each time the coroutine is woken
+local queue = { items = {} }
+local taken = {}
+for _, name in ipairs({ 'first', 'second' }) do
+	loop:schedule(function ()
+		while #queue.items == 0 do
+			loop:suspend(queue)
+		end
+		taken[#taken + 1] = name .. ' took ' .. table.remove(queue.items, 1)
+	end)
+end
+queue.items[1] = 'job'
+loop:resume(queue)
+expect_equal(table.concat(taken, ', '), 'first took job', 'the second checks again, and parks again')
+queue.items[1] = 'another job'
+loop:resume(queue)
+expect_equal(table.concat(taken, ', '), 'first took job, second took another job')
+
+-- suspend is only possible from within a coroutine
+expect_error('must be called from within a coroutine', loop.suspend, loop)
+expect_error('needs the key', loop.resume, loop)
+
+-- any coroutine can be suspended, and is then adopted by the loop
+local adopted_steps = {}
+local outside = coroutine.create(function ()
+	adopted_steps[#adopted_steps + 1] = loop:suspend('adopt')
+	coroutine.yield(10)
+	adopted_steps[#adopted_steps + 1] = 'after 10ms on the loop'
+end)
+assert(coroutine.resume(outside))
+expect_equal(loop:resume('adopt', 'adopted'), 1)
+loop:sleep_ex(50)
+expect_equal(table.concat(adopted_steps, ', '), 'adopted, after 10ms on the loop')
+
+-- a record left by resuming a coroutine some other way is replaced on its next suspend
+local moved = coroutine.create(function ()
+	loop:suspend('first key')
+	return loop:suspend('second key')
+end)
+assert(coroutine.resume(moved))
+assert(coroutine.resume(moved)) -- resumed directly, not through the loop
+expect_equal(loop:resume('first key'), 0, 'no longer parked against the first key')
+expect_equal(loop:resume('second key'), 1)
+
+-- yielding a condition resumes once it is true, checked whenever anything else has run
+local flag = false
+local condition_met = false
+loop:schedule(function ()
+	coroutine.yield(function () return flag end)
+	condition_met = true
+end)
+loop:add_once(20, function () flag = true end)
+loop:sleep_ex(10)
+expect_equal(condition_met, false)
+loop:sleep_ex(50)
+expect_equal(condition_met, true)
+
+-- a condition keeps the thread running, a parked coroutine does not
+expect_equal(run_rascal_script([[
+	local messaging = require('rascal.messaging')
+	local finish = messaging.utc_time() + 0.2
+	loop:schedule(function ()
+		coroutine.yield(function () return messaging.utc_time() >= finish end)
+		print('condition met')
+	end)
+	loop:schedule(function ()
+		loop:suspend()
+		print('never resumed')
+	end)
+	print('script done')
+]]), 'script done\ncondition met')
+
+-- a coroutine parked against a key that nothing else refers to can be collected
+local reference = setmetatable({}, { __mode = 'v' })
+reference[1] = loop:schedule(function () loop:suspend({}) end)
+reference[2] = loop:schedule(function () loop:suspend() end)
+collectgarbage()
+collectgarbage()
+expect_equal(reference[1], nil, 'parked against a dropped token')
+expect_equal(reference[2], nil, 'parked against itself')

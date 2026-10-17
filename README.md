@@ -38,7 +38,12 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
   - **Starting threads:** `require('rascal.threads').start(code, ...)` runs a string of Lua source in a new thread, with the arguments as `...`. Arguments are limited to what cmsgpack can encode. Threads don't return values; results are sent back over ZeroMQ.
   - **Sockets:** every thread shares one ZeroMQ context. `rascal.messaging` names sockets as inproc endpoints by default, eg. `messaging.bind('PULL', 'jobs')`, with `bind_network` and `connect_network` for anything else.
   - **Running to completion:** once a thread's code, or the main script, is complete, its loop (`messaging.loop()`) runs until it has no sockets or timers and every thread it started has finished, then exits. A socket stays in the loop until it is removed with `loop:remove_socket`.
-  - **Coroutines:** `loop:schedule(fn, ...)` runs a function as a coroutine on the loop. Inside it, `coroutine.yield(milliseconds)` waits that long and `coroutine.yield()` waits for one turn of the loop, so timed sequences and repeating loops read as straight-line code.
+  - **Coroutines:** `loop:schedule(fn, ...)` runs a function as a coroutine on the loop, so timed sequences, repeating loops and waits read as straight-line code. Inside a coroutine:
+    - `coroutine.yield(milliseconds)` waits that long, and `coroutine.yield()` waits one turn of the loop.
+    - `coroutine.yield(condition)` waits until `condition()` returns true. It's checked whenever anything else has run in the thread, and at least every 100ms.
+    - `loop:suspend(key)` parks the coroutine against a key (by default the coroutine itself) until `loop:resume(key, ...)`. Resuming wakes every coroutine parked against that key straight away, and `suspend` returns the values given to `resume`.
+    - `loop:suspend` works in any coroutine, which the loop then adopts.
+    - See `lua/rascal/messaging.lua` for the details.
   - **Failures:** a thread that fails reports its error with `log` and ends.
   - **Background threads:** `threads.start_background(code, ...)` starts a thread that its parent doesn't wait for, for long-running work that ends with the process.
   - **Services:** `rascal.services` serves an object's methods by name with `services.serve(name, 'REP' | 'ROUTER' | 'PULL' | 'PUB', api, target)`. Any thread can then call `services.connect(name)` or `services.subscribe(name, target)`, which wait until the service is served. The api is described with strings, eg. `{ add = 'amount:number -> total:number' }`, and values are passed by position.

@@ -13,7 +13,7 @@
 -- through the explicit bind_network and connect_network.
 --
 -- loop:schedule(fn, ...) runs a function as a coroutine on the loop, which
--- can wait with coroutine.yield(milliseconds), see schedule below.
+-- can wait on time, a condition, or be parked and resumed, see below.
 --
 -- When a thread's code is complete (including the main script) its loop is
 -- run, until it has no sockets or timers and no other work, see complete()
@@ -42,28 +42,137 @@ function messaging.context()
 	return context
 end
 
--- loop:schedule(fn, ...) runs fn(...) as a coroutine on the loop. Within it
--- coroutine.yield(milliseconds) resumes it after that many milliseconds, and
--- coroutine.yield() resumes it on the next turn of the loop, letting other
--- sockets and timers run. Errors are raised as from any loop callback, and
--- a waiting coroutine keeps the loop running, as its timer does
+-- coroutines on the loop ---------------------------------------------------------------------
+--
+-- loop:schedule(fn, ...) runs fn(...) as a coroutine on the loop, straight
+-- away until it first yields. Within a coroutine on the loop:
+--
+--   coroutine.yield(milliseconds)   resumes after that many milliseconds
+--   coroutine.yield()               resumes on the next turn of the loop
+--   coroutine.yield(condition)      resumes once condition() returns true, it is
+--                                   checked whenever anything else has run in this
+--                                   thread, and at least every 100ms
+--   loop:suspend(key)               parks the coroutine against key (by default
+--                                   the coroutine itself), returning the values
+--                                   given to the resume that wakes it
+--   loop:resume(key, ...)           wakes every coroutine parked against key,
+--                                   straight away, and clears them from it,
+--                                   returning how many were woken
+--
+-- A resume with nothing parked against its key does nothing, it is not
+-- remembered for a later suspend. To wait on shared state, check it again
+-- each time the coroutine is woken:
+--
+--   while queue:is_empty() do loop:suspend(queue) end
+--
+-- loop:suspend can be used in any coroutine, which the loop then adopts, so
+-- its later yields are handled as above. Errors in coroutines are raised as
+-- from any loop callback (for resume, in the code calling resume).
+--
+-- A coroutine waiting on time or a condition keeps the loop running, a
+-- parked coroutine does not: only code in this thread can resume it, and if
+-- nothing else is running in the thread nothing can.
+
+-- yielded by suspend, to park the coroutine with no timer or condition
+local parked = setmetatable({}, { __tostring = function () return 'parked' end })
+
+-- parked coroutines by key, and the key each is parked against
+local parked_by_key = setmetatable({}, { __mode = 'k' })
+local parked_key = setmetatable({}, { __mode = 'k' })
+
+-- coroutines waiting on a condition, in the order they started waiting
+local waiting_conditions = {}
+
+-- resume a coroutine, then handle what it yields
+local function step(co, ...)
+	local ok, yielded = coroutine.resume(co, ...)
+	if not ok then
+		error(debug.traceback(co, yielded), 0)
+	end
+	if coroutine.status(co) == 'dead' or yielded == parked then
+		return
+	end
+	if type(yielded) == 'function' then
+		waiting_conditions[#waiting_conditions + 1] = { co = co, condition = yielded }
+	elseif yielded == nil or (type(yielded) == 'number' and yielded >= 0) then
+		loop:add_once(yielded or 0, function () step(co) end)
+	else
+		error('messaging: a coroutine on the loop can yield a number of milliseconds, a condition function, or nothing', 0)
+	end
+end
+
+-- resume each coroutine whose condition has become true
+local function check_conditions()
+	if #waiting_conditions == 0 then
+		return
+	end
+	local checking = waiting_conditions
+	waiting_conditions = {}
+	for _, waiting in ipairs(checking) do
+		local ok, met = pcall(waiting.condition)
+		if not ok then
+			error(debug.traceback(waiting.co, met), 0)
+		end
+		if met then
+			step(waiting.co)
+		else
+			waiting_conditions[#waiting_conditions + 1] = waiting
+		end
+	end
+end
+
 local function schedule(loop, fn, ...)
 	local co = coroutine.create(fn)
-	local function resume(...)
-		local ok, delay = coroutine.resume(co, ...)
-		if not ok then
-			error(debug.traceback(co, delay), 0)
-		end
-		if coroutine.status(co) == 'dead' then
-			return
-		end
-		if delay ~= nil and (type(delay) ~= 'number' or delay < 0) then
-			error('messaging: a scheduled coroutine can yield a number of milliseconds, or nothing', 0)
-		end
-		loop:add_once(delay or 0, function () resume() end)
-	end
-	resume(...)
+	step(co, ...)
 	return co
+end
+
+local function suspend(loop, key)
+	local co, is_main = coroutine.running()
+	if is_main then
+		error('messaging: loop:suspend must be called from within a coroutine', 2)
+	end
+	if key == nil then
+		key = co
+	end
+	-- a record from an earlier suspend remains if the coroutine was resumed some other way
+	local previous_key = parked_key[co]
+	if previous_key ~= nil and parked_by_key[previous_key] then
+		local previous = parked_by_key[previous_key]
+		for i = #previous, 1, -1 do
+			if previous[i] == co then
+				table.remove(previous, i)
+			end
+		end
+	end
+	parked_key[co] = key
+	local coroutines = parked_by_key[key]
+	if not coroutines then
+		coroutines = {}
+		parked_by_key[key] = coroutines
+	end
+	coroutines[#coroutines + 1] = co
+	return coroutine.yield(parked)
+end
+
+local function resume(loop, key, ...)
+	if key == nil then
+		error('messaging: loop:resume needs the key the coroutine was suspended against', 2)
+	end
+	local coroutines = parked_by_key[key]
+	if not coroutines then
+		return 0
+	end
+	parked_by_key[key] = nil
+	local woken = 0
+	for _, co in ipairs(coroutines) do
+		if parked_key[co] == key and coroutine.status(co) == 'suspended' then
+			parked_key[co] = nil
+			woken = woken + 1
+			step(co, ...)
+		end
+	end
+	return woken
 end
 
 -- the loop for this thread, created on first use
@@ -71,6 +180,19 @@ function messaging.loop()
 	if not loop then
 		loop = zloop.new(messaging.context())
 		loop.schedule = schedule
+		loop.suspend = suspend
+		loop.resume = resume
+		-- check conditions each time the loop has run anything, and wake at least
+		-- every 100ms while there are any, for conditions that depend on time
+		local poll = loop.poll
+		function loop:poll(interval)
+			if #waiting_conditions > 0 and interval > 100 then
+				interval = 100
+			end
+			local count, err = poll(self, interval)
+			check_conditions()
+			return count, err
+		end
 	end
 	return loop
 end
@@ -197,7 +319,7 @@ local function loop_is_busy()
 end
 
 local function is_busy()
-	local busy = loop_is_busy()
+	local busy = loop_is_busy() or #waiting_conditions > 0
 	for _, check in ipairs(busy_checks) do
 		-- every check is called, so each can tidy up as it goes
 		if check() then
