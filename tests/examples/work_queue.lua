@@ -1,22 +1,22 @@
 -- work queue: a queue thread hands out jobs to worker threads
 --
---   main thread    serves  work_queue.results (PULL)   collects completed jobs
+--   main thread    serves  work_queue.results (PULL)    collects completed jobs
 --                  queues jobs, then says the queue is finished
---   queue thread   serves  work_queue.queue (PULL)     add(job), finish()
---                  serves  work_queue.jobs (REP)       next_job() -> job | nil, status
+--   queue thread   serves  work_queue.queue (PULL)      add(job), finish()
+--                  serves  work_queue.jobs (ROUTER)     next_job() -> job, or nil once finished
 --                  starts the worker threads
---   worker threads request jobs until there are none, pushing each result to main
+--   worker threads ask for one job at a time, until there are none
 --
--- Shutdown is part of the work, there is no general shutdown: a thread
--- waiting on its loop could always be about to receive more work. Here the
--- end of the work flows through the services:
---   main queues every job, then calls finish() on the queue
---   once finished and empty, the queue answers each worker with no job
---   each worker then stops, and once every worker has been told, the queue
---   closes its services, its loop is empty, so it waits for its workers
---   and completes
---   main closes its results service once every result has arrived, and so
---   completes when the queue thread has, and the process exits
+-- next_job is called on a ROUTER service, so each call runs as a coroutine in
+-- the queue thread. When there is no job yet it parks with loop:suspend, and
+-- each add (or finish) resumes the parked calls, which check the queue again.
+-- A worker never polls, its call simply returns once there is a job for it.
+--
+-- Shutdown is part of the work: main queues every job then calls finish().
+-- Once finished and empty, the queue answers each request with no job, and
+-- once every worker has been told, it closes its services. Main
+-- closes its results service once every result has arrived, then every
+-- thread is complete and the process exits.
 
 local services = require('rascal.services')
 local threads = require('rascal.threads')
@@ -77,49 +77,48 @@ end)
 
 threads.start([==[
 	local worker_count = ...
+	local prelude = require('prelude')
 	local services = require('rascal.services')
 	local threads = require('rascal.threads')
 
 	local queue = {
-		jobs = {},
-		first = 1,
-		last = 0,
+		jobs = prelude.list(),
 		finished = false,
 		workers_stopped = 0,
 	}
 
 	local queue_service, jobs_service
 
-	-- queue api, pushed from main
+	-- queue api, pushed from main, each change wakes any calls waiting for a job
 
 	function queue:add(job)
-		self.last = self.last + 1
-		self.jobs[self.last] = job
+		self.jobs:push(job)
+		loop:resume(self)
 	end
 
 	function queue:finish()
 		self.finished = true
+		loop:resume(self)
 	end
 
-	-- jobs api, requested by workers
+	-- jobs api, requested by the workers, each call waits until there is a job or the queue is finished
 
 	function queue:next_job()
-		if self.first <= self.last then
-			local job = self.jobs[self.first]
-			self.jobs[self.first] = nil
-			self.first = self.first + 1
+		while self.jobs:is_empty() and not self.finished do
+			loop:suspend(self)
+		end
+		if not self.jobs:is_empty() then
+			local job = self.jobs[1]
+			self.jobs:remove(1)
 			return job
 		end
-		if not self.finished then
-			return nil, 'wait'
-		end
-		-- finished and empty, this worker stops, and once all have stopped so does the queue
+		-- finished and empty, so this worker stops, and once all have stopped so does the queue
 		self.workers_stopped = self.workers_stopped + 1
 		if self.workers_stopped == worker_count then
 			queue_service:close()
 			jobs_service:close()
 		end
-		return nil, 'finished'
+		return nil
 	end
 
 	queue_service = services.serve('work_queue.queue', 'PULL', {
@@ -127,11 +126,11 @@ threads.start([==[
 		finish = '',
 	}, queue)
 
-	jobs_service = services.serve('work_queue.jobs', 'REP', {
-		next_job = '-> job:table, status:string',
+	jobs_service = services.serve('work_queue.jobs', 'ROUTER', {
+		next_job = '-> job:table',
 	}, queue)
 
-	-- the workers, each requests jobs until told there are no more
+	-- the workers, each asking for one job at a time until there are no more
 	for i = 1, worker_count do
 		threads.start([=[
 			local name = ...
@@ -139,19 +138,11 @@ threads.start([==[
 			local jobs = services.connect('work_queue.jobs')
 			local results = services.connect('work_queue.results')
 
-			loop:schedule(function ()
-				while true do
-					local job, status = jobs:next_job()
-					if job then
-						results:completed(name, job.id, job.id * job.id)
-					elseif status == 'wait' then
-						-- nothing queued yet
-						coroutine.yield(5)
-					else
-						break
-					end
-				end
-			end)
+			local job = jobs:next_job()
+			while job do
+				results:completed(name, job.id, job.id * job.id)
+				job = jobs:next_job()
+			end
 		]=], 'worker ' .. i)
 	end
 ]==], worker_count)

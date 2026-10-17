@@ -375,17 +375,123 @@ function client_object:close()
 	end
 end
 
--- connect to a REP or PULL service by name, waiting until it is published,
--- and return an object with a method for each api method
-function services.connect(name)
+-- a DEALER connection, sending requests from coroutines, each parked until its reply
+local dealer_object = setmetatable({}, { __index = client_object })
+dealer_object.__index = dealer_object
+
+-- closing resumes any calls still waiting, with an error
+function dealer_object:close()
+	if not self.socket then
+		return
+	end
+	if self.in_loop then
+		messaging.loop():remove_socket(self.socket)
+	end
+	self.socket:close()
+	self.socket = nil
+	local waiting = self.waiting
+	self.waiting = {}
+	for _, token in pairs(waiting) do
+		messaging.loop():resume(token, nil)
+	end
+end
+
+local function connect_dealer(name, details, methods)
+	local loop = messaging.loop()
+	local socket = messaging.connect_network('DEALER', details.endpoint)
+	local client = setmetatable({
+		name = name,
+		socket = socket,
+		api = details.api,
+		waiting = {},		-- request id -> token
+		outstanding = 0,
+		next_id = 0,
+		in_loop = false,
+	}, dealer_object)
+
+	-- replies arrive as the request id, an empty delimiter, then the reply
+	local function receive(socket)
+		local frames = socket:recv_all()
+		local id, reply = frames[1], frames[3]
+		local token = client.waiting[id]
+		if not token then
+			return
+		end
+		client.waiting[id] = nil
+		client.outstanding = client.outstanding - 1
+		-- only in the loop while waiting for replies, so an idle connection
+		-- does not keep the thread running
+		if client.outstanding == 0 then
+			loop:remove_socket(socket)
+			client.in_loop = false
+		end
+		loop:resume(token, reply)
+	end
+
+	for method in pairs(methods) do
+		client[method] = function (self, ...)
+			local _, is_main = coroutine.running()
+			if is_main then
+				error('services: calls on a DEALER connection to ' .. name .. ' must be made from within a coroutine, eg. in loop:schedule or a ROUTER method', 2)
+			end
+			if not self.socket then
+				error('services: the DEALER connection to ' .. name .. ' is closed', 2)
+			end
+			local ok, packed = pcall(messaging.pack, ...)
+			if not ok then
+				error('services: ' .. name .. ':' .. method .. ' ' .. packed, 2)
+			end
+			self.next_id = self.next_id + 1
+			local id = tostring(self.next_id)
+			local token = {}
+			self.waiting[id] = token
+			self.outstanding = self.outstanding + 1
+			if not self.in_loop then
+				loop:add_socket(self.socket, receive)
+				self.in_loop = true
+			end
+			-- the request id travels in the envelope, which REP and ROUTER services return
+			self.socket:send_all({ id, '', method, packed })
+			local reply = loop:suspend(token)
+			if reply == nil then
+				error('services: the DEALER connection to ' .. name .. ' was closed while waiting for ' .. method, 2)
+			end
+			local results = table.pack(messaging.unpack(reply))
+			if not results[1] then
+				error('services: ' .. name .. ':' .. method .. ' failed: ' .. tostring(results[2]), 2)
+			end
+			return table.unpack(results, 2, results.n)
+		end
+	end
+	return client
+end
+
+-- connect to a REP, ROUTER or PULL service by name, waiting until it is
+-- published, and return an object with a method for each api method
+--
+-- REP and ROUTER services are connected with REQ by default, where each call
+-- blocks this thread until it returns. Connect with 'DEALER' to instead have
+-- each call park only the coroutine making it (see loop:suspend), so other
+-- coroutines, timers and sockets in this thread carry on meanwhile. Calls on
+-- a DEALER connection must be made from within a coroutine. The socket type
+-- has no effect on connections to PULL services.
+function services.connect(name, socket_type)
+	if socket_type ~= nil and socket_type ~= 'REQ' and socket_type ~= 'DEALER' then
+		error('services: connect with REQ or DEALER, not ' .. tostring(socket_type), 2)
+	end
 	local details = services.wait(name)
 	if details.socket_type == 'SUB' then
 		error('services: ' .. name .. ' publishes, use services.subscribe', 2)
 	end
+	local methods = parse_api(details.api)
+	if details.socket_type == 'REQ' and socket_type == 'DEALER' then
+		return connect_dealer(name, details, methods)
+	end
+
 	local socket = messaging.connect_network(details.socket_type, details.endpoint)
 	local client = setmetatable({ name = name, socket = socket, api = details.api }, client_object)
 
-	for method in pairs(parse_api(details.api)) do
+	for method in pairs(methods) do
 		if details.socket_type == 'REQ' then
 			client[method] = function (self, ...)
 				return request(self.socket, name, method, ...)

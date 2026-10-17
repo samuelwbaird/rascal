@@ -48,6 +48,7 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
   - **Background threads:** `threads.start_background(code, ...)` starts a thread that its parent doesn't wait for, for long-running work that ends with the process.
   - **Services:** `rascal.services` serves an object's methods by name with `services.serve(name, 'REP' | 'ROUTER' | 'PULL' | 'PUB', api, target)`. Any thread can then call `services.connect(name)` or `services.subscribe(name, target)`, which wait until the service is served. The api is described with strings, eg. `{ add = 'amount:number -> total:number' }`, and values are passed by position.
     - A ROUTER service is called the same way as REP, but each call runs as a coroutine, so a method can yield (eg. `coroutine.yield(milliseconds)`). Calls from different callers can then be in progress at the same time, and each is replied to when it completes.
+    - `services.connect(name, 'DEALER')` connects to a REP or ROUTER service so that each call parks only the coroutine making it, until its reply arrives (see `loop:suspend`). Other coroutines, timers and sockets in the thread carry on meanwhile, and one connection can have many calls in progress. Calls on a DEALER connection must be made from within a coroutine.
     - Errors in a REP or ROUTER method are raised in the caller.
     - Services are listed in a registry that runs in a background thread.
     - `service:bind_network(endpoint)` also makes a service reachable over the network.

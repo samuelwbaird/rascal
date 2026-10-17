@@ -190,6 +190,80 @@ while services.find('test_slow') and checks < 50 do
 end
 expect_equal(services.find('test_slow'), nil, 'closed once the call in progress replied')
 
+-- DEALER connections park only the calling coroutine until the reply arrives
+threads.start([[
+	local services = require('rascal.services')
+	local async = {}
+	function async:wait(milliseconds, label)
+		coroutine.yield(milliseconds)
+		return label
+	end
+	function async:fail() error('failed for the dealer') end
+	services.serve('test_async', 'ROUTER', {
+		wait = 'milliseconds:number, label:string -> label:string',
+		fail = '',
+	}, async)
+]])
+local dealer = services.connect('test_async', 'DEALER')
+expect_error('must be made from within a coroutine', dealer.wait, dealer, 1, 'outside')
+
+-- several coroutines in this one thread, each with a call in progress at the same time
+local finished = {}
+local dealer_started = messaging.utc_time()
+for _, name in ipairs({ 'first', 'second', 'third' }) do
+	loop:schedule(function ()
+		local result = dealer:wait(200, name)
+		finished[#finished + 1] = result
+	end)
+end
+while #finished < 3 and messaging.utc_time() - dealer_started < 5 do
+	loop:sleep_ex(10)
+end
+expect_equal(#finished, 3)
+assert(messaging.utc_time() - dealer_started < 0.5, 'calls on one DEALER connection were not in progress at the same time')
+table.sort(finished)
+expect_equal(table.concat(finished, ', '), 'first, second, third')
+
+-- errors are raised in the calling coroutine, and DEALER also works with REP services
+local dealer_results = {}
+loop:schedule(function ()
+	dealer_results.error = select(2, pcall(dealer.fail, dealer))
+	local rep_dealer = services.connect('test_store', 'DEALER')
+	dealer_results.rep = rep_dealer:get('answer')
+	rep_dealer:close()
+end)
+while dealer_results.rep == nil and messaging.utc_time() - dealer_started < 5 do
+	loop:sleep_ex(10)
+end
+assert(tostring(dealer_results.error):find('failed for the dealer', 1, true), tostring(dealer_results.error))
+expect_equal(dealer_results.rep, 42)
+
+-- closing the connection resumes waiting calls with an error
+local closed_error = nil
+loop:schedule(function ()
+	closed_error = select(2, pcall(dealer.wait, dealer, 1000, 'never'))
+end)
+dealer:close()
+assert(tostring(closed_error):find('was closed while waiting for wait', 1, true), tostring(closed_error))
+expect_error('connect with REQ or DEALER', services.connect, 'test_async', 'ROUTER')
+
+-- an idle DEALER connection does not keep its thread running
+expect_equal(run_rascal_script([[
+	local services = require('rascal.services')
+	require('rascal.threads').start([==[
+		local echo = {}
+		function echo:echo(text)
+			echo_service:close()
+			return text
+		end
+		echo_service = require('rascal.services').serve('echo', 'ROUTER', { echo = 'text:string -> text:string' }, echo)
+	]==])
+	local echo = services.connect('echo', 'DEALER')
+	loop:schedule(function ()
+		print(echo:echo('echoed'))
+	end)
+]]), 'echoed')
+
 -- a process ends once its services are closed and its threads are complete
 expect_equal(run_rascal_script([[
 	local services = require('rascal.services')
