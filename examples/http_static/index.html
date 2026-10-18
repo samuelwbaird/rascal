@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>rascal http server</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<h1>rascal http server</h1>
+	<p>Handled in the server thread:</p>
+	<ul>
+		<li><a href="/hello">/hello</a>, text</li>
+		<li><a href="/hello?name=rascal">/hello?name=rascal</a>, with a query variable</li>
+		<li><a href="/json">/json</a>, JSON</li>
+		<li><a href="/user/42">/user/42</a>, a pattern capture</li>
+		<li><a href="/slow">/slow</a>, waits 20ms before replying</li>
+	</ul>
+	<p>Handled in worker threads:</p>
+	<ul>
+		<li><a href="/workers/hello">/workers/hello</a>, text, saying which worker answered</li>
+		<li><a href="/workers/json">/workers/json</a>, JSON</li>
+		<li><a href="/workers/slow">/workers/slow</a>, waits 20ms before replying</li>
+	</ul>
+</body>
+</html>

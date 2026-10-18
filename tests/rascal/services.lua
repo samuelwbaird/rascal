@@ -264,6 +264,104 @@ expect_equal(run_rascal_script([[
 	end)
 ]]), 'echoed')
 
+-- a balanced service spreads calls across worker threads, each answering the same api
+local balanced = services.serve_balanced('test_balanced', 3, {
+	square = 'n:number -> result:number, worker:number',
+	wait = 'milliseconds:number -> worker:number',
+	fail = '',
+}, function (number, offset)
+	local worker = {}
+	function worker:square(n) return n * n + offset, number end
+	function worker:wait(milliseconds)
+		coroutine.yield(milliseconds)
+		return number
+	end
+	function worker:fail() error('worker ' .. number .. ' failed') end
+	return worker
+end, 1)
+expect_equal(services.find('test_balanced').socket_type, 'REQ', 'callers use REQ as for REP')
+
+-- called from another thread, as calls from this thread would wait on this thread's own loop
+local balanced_results = messaging.bind('PULL', 'test_balanced_results')
+threads.start(function ()
+	local cjson = require('cjson')
+	local services = require('rascal.services')
+	local push = require('rascal.messaging').connect('PUSH', 'test_balanced_results')
+	local square = services.connect('test_balanced')
+
+	-- one call at a time, so workers take turns
+	local by_worker = {}
+	local value
+	for i = 1, 30 do
+		local result, worker = square:square(i)
+		value = result
+		by_worker[worker] = (by_worker[worker] or 0) + 1
+	end
+	local ok, err = pcall(square.fail, square)
+
+	-- many calls at once on a DEALER connection, each worker yielding
+	local dealer = services.connect('test_balanced', 'DEALER')
+	local waits = {}
+	local started = require('rascal.messaging').utc_time()
+	for i = 1, 6 do
+		loop:schedule(function ()
+			local worker = dealer:wait(200)
+			waits[#waits + 1] = worker
+			if #waits == 6 then
+				push:send(cjson.encode({
+					value = value,
+					by_worker = by_worker,
+					error = err,
+					elapsed = require('rascal.messaging').utc_time() - started,
+				}))
+				push:close()
+			end
+		end)
+	end
+end)
+-- the balancer runs on this thread's loop, so wait by running the loop
+local report_message = nil
+local report_started = messaging.utc_time()
+while not report_message and messaging.utc_time() - report_started < 5 do
+	loop:sleep_ex(10)
+	report_message = balanced_results:recv(messaging.zmq.DONTWAIT)
+end
+local balanced_report = require('cjson').decode((assert(report_message, 'no report from the balanced service caller')))
+balanced_results:close()
+expect_equal(balanced_report.value, 30 * 30 + 1, 'worker arguments are passed on')
+expect_equal(table.concat(balanced_report.by_worker, ','), '10,10,10')
+assert(balanced_report.error:find('test_balanced:fail failed: [^\n]*worker %d failed'), balanced_report.error)
+assert(balanced_report.elapsed < 0.5, 'calls were not spread across the workers: ' .. balanced_report.elapsed)
+
+-- closing stops the service and its workers
+balanced:close()
+expect_equal(services.find('test_balanced'), nil)
+expect_error('at least one worker', services.serve_balanced, 'test_bad', 0, { a = '' }, function () end)
+local captured = {}
+expect_error("refers to 'captured'", services.serve_balanced, 'test_bad', 1, { a = '' }, function () return captured end)
+
+-- a worker that fails to start is left out, the others answer every call
+local partial = run_rascal_script([[
+	local services = require('rascal.services')
+	local service = services.serve_balanced('partial', 2, { number = '-> number:number' }, function (number)
+		if number == 1 then
+			error('worker 1 could not start')
+		end
+		return { number = function () return number end }
+	end)
+	require('rascal.threads').start(function ()
+		local partial = require('rascal.services').connect('partial')
+		local numbers = {}
+		for i = 1, 4 do
+			numbers[#numbers + 1] = partial:number()
+		end
+		print('answered by ' .. table.concat(numbers, ','))
+	end)
+	loop:add_once(500, function () service:close() end)
+]])
+assert(partial:find('thread failed: [^\n]*worker 1 could not start'), partial)
+assert(partial:find('answered by 2,2,2,2', 1, true), partial)
+
 -- a process ends once its services are closed and its threads are complete
 expect_equal(run_rascal_script([[
 	local services = require('rascal.services')

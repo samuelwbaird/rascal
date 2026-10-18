@@ -85,7 +85,9 @@ ALL_LUAFILES := $(foreach m,$(ALL_LUAMODULES),$(word 2,$(subst :, ,$(m))))
 RASCAL := $(BIN)/rascal
 HOST_LUA := $(BUILD)/host/lua
 
-RASCAL_OBJS := $(OBJ)/rascal/main.o $(OBJ)/rascal/lua.o $(OBJ)/rascal/rascal.o $(OBJ)/rascal/modules.o
+# every src/*.c, plus the interpreter and the generated module tables
+RASCAL_OBJS := $(patsubst src/%.c,$(OBJ)/rascal/%.o,$(sort $(wildcard src/*.c))) \
+	$(OBJ)/rascal/lua.o $(OBJ)/rascal/modules.o
 
 all: $(RASCAL)
 	@echo "built $(RASCAL)"

@@ -5,16 +5,16 @@
 -- tests are grouped in folders beside this file:
 --   dependencies/   the third party libraries compiled into rascal
 --   rascal/         rascal's own libraries
---   examples/       example programs, showing patterns of threads and services
+-- and the examples in ../examples are run as tests too.
 --
 -- dependency and library tests are plain scripts run in this process, and
--- fail if they raise an error. Examples are complete programs, each run in
--- its own rascal process (as they rely on running to completion), and fail
--- if that process does not exit successfully.
+-- fail if they raise an error. Each example is run in its own rascal process
+-- with --test (servers check themselves and exit, rather than serving until
+-- stopped), and fails if that process does not exit successfully.
 
 local lfs = require('lfs')
 
-local categories = { 'dependencies', 'rascal', 'examples' }
+local categories = { 'dependencies', 'rascal', '../examples' }
 
 function expect_equal(actual, expected, message)
 	if actual ~= expected then
@@ -63,7 +63,7 @@ end
 
 local function run_test(path)
 	if path:find('examples/', 1, true) then
-		local output, success = run_rascal(path)
+		local output, success = run_rascal(path .. ' --test')
 		if not success then
 			-- the example's own output explains the failure, without a traceback here
 			error({ example_output = output })
@@ -80,7 +80,7 @@ for _, path in ipairs(paths) do
 		if type(err) == 'table' and err.example_output then
 			return 'example failed:\n' .. err.example_output
 		end
-		return debug.traceback(err, 2)
+		return debug.traceback(tostring(err), 2)
 	end, path)
 	if ok then
 		print('  ok    ' .. name)

@@ -28,6 +28,10 @@
 -- runs in a background thread. They can also be bound to network endpoints
 -- with service:bind_network(endpoint).
 --
+-- services.serve_balanced(name, worker_count, api, worker, ...) serves a
+-- service whose calls are spread across worker threads, each answering the
+-- same api, see below.
+--
 -- Serving a service adds its socket to this thread's loop, so the thread
 -- keeps running to answer it (see messaging.complete).
 
@@ -243,7 +247,9 @@ function service_object:close()
 		self.close_when_complete = true
 		return
 	end
-	registry_request('unpublish', self.name)
+	if self.published then
+		registry_request('unpublish', self.name)
+	end
 	messaging.loop():remove_socket(self.socket)
 	self.socket:close()
 	self.socket = nil
@@ -258,6 +264,8 @@ local function pack_reply(results)
 	return reply
 end
 
+local create_service
+
 -- serve the methods of target as a named service, with a socket type of
 -- REP, ROUTER, PULL or PUB. A PUB service has no target, instead the returned
 -- service object has a method for each api method that publishes the call
@@ -270,7 +278,19 @@ function services.serve(name, socket_type, api, target)
 	if socket_type ~= 'PUB' and type(target) ~= 'table' then
 		error('services: a ' .. socket_type .. ' service needs a target object to call', 2)
 	end
+	local service = create_service(name, socket_type, methods, target)
+	registry_request('publish', {
+		name = name,
+		endpoint = messaging.inproc(name),
+		socket_type = client_socket_type,
+		api = api,
+	})
+	service.published = true
+	return service
+end
 
+-- create a service bound at inproc://<name>, without publishing it
+create_service = function (name, socket_type, methods, target)
 	local socket = messaging.bind(socket_type, name)
 	local service = setmetatable({
 		name = name,
@@ -354,13 +374,203 @@ function services.serve(name, socket_type, api, target)
 		end
 	end
 
+	return service
+end
+
+-- balanced services ----------------------------------------------------------------------
+
+-- the private endpoints of a balanced service's workers
+local function balanced_name(name, ...)
+	return table.concat({ 'rascal.balanced', name, ... }, '.')
+end
+
+-- internal, run in each worker thread of a balanced service
+function services.run_balanced_worker(name, number, api, code, ...)
+	local target = threads.load(code)(number, ...)
+	if type(target) ~= 'table' then
+		error('services: the worker code for ' .. name .. ' must return the object to serve', 0)
+	end
+	local worker_name = balanced_name(name, number)
+	local service = create_service(worker_name, 'ROUTER', parse_api(api), target)
+
+	-- the balancer says when to stop
+	local control = messaging.bind('PULL', balanced_name(name, number, 'control'))
+	messaging.loop():add_socket(control, function (socket)
+		socket:recv()
+		messaging.loop():remove_socket(socket)
+		socket:close()
+		service:close()
+	end)
+
+	-- and is told when this worker is ready for calls
+	local ready = messaging.connect('PUSH', balanced_name(name, 'ready'))
+	ready:send(tostring(number))
+	ready:close()
+end
+
+-- each worker thread starts here
+local function balanced_worker_thread(...)
+	require('rascal.services').run_balanced_worker(...)
+end
+
+local balanced_object = setmetatable({}, { __index = service_object })
+balanced_object.__index = balanced_object
+
+-- stop serving, remove the service from the registry and stop the workers
+-- (waiting until calls in progress have replied)
+function balanced_object:close()
+	if not self.socket then
+		return
+	end
+	if self.calls_in_progress > 0 then
+		self.close_when_complete = true
+		return
+	end
+	registry_request('unpublish', self.name)
+	local loop = messaging.loop()
+	loop:remove_socket(self.socket)
+	self.socket:close()
+	self.socket = nil
+	loop:remove_socket(self.ready_socket)
+	self.ready_socket:close()
+	for _, worker in ipairs(self.workers) do
+		worker.control:send('stop')
+		worker.control:close()
+		loop:remove_socket(worker.socket)
+		worker.socket:close()
+	end
+end
+
+-- serve a named service whose calls are spread across a number of worker
+-- threads, each answering the same api. Callers connect to it as to a REP
+-- service. worker is a function or source, run in each worker thread with
+-- the worker's number and any further arguments, which returns the object to
+-- serve in that thread (served as ROUTER, so its methods can yield).
+--
+-- Each call goes to the ready worker with the fewest calls in progress, with
+-- workers taking turns when several have the same number. The
+-- balancing runs on this thread's loop, and closing the returned service
+-- also stops the workers.
+--
+-- Each worker has its own state, and consecutive calls can go to different
+-- workers, so this suits apis that are stateless, or keep their state in
+-- other services, not those that own state themselves
+function services.serve_balanced(name, worker_count, api, worker, ...)
+	if math.type(worker_count) ~= 'integer' or worker_count < 1 then
+		error('services: a balanced service needs at least one worker', 2)
+	end
+	local methods = parse_api(api)
+	local code = threads.code(worker, 2)
+	local loop = messaging.loop()
+
+	local front = messaging.bind('ROUTER', name)
+	local balanced = setmetatable({
+		name = name,
+		socket = front,
+		socket_type = 'ROUTER',
+		calls_in_progress = 0,
+		workers = {},
+		ready_socket = messaging.bind('PULL', balanced_name(name, 'ready')),
+	}, balanced_object)
+
+	local waiting = {}		-- calls received before any worker is ready
+	local forwarded = {}	-- request id -> the call's envelope and worker
+	local next_id = 0
+	local next_worker = 1	-- where the search starts, so that ties are taken in turn
+
+	local function reply(envelope, packed)
+		local frames = table.move(envelope, 1, #envelope, 1, {})
+		frames[#frames + 1] = ''
+		frames[#frames + 1] = packed
+		front:send_all(frames)
+		balanced.calls_in_progress = balanced.calls_in_progress - 1
+		if balanced.close_when_complete and balanced.calls_in_progress == 0 then
+			balanced:close()
+		end
+	end
+
+	-- send a call, as received, to the ready worker with the fewest calls in
+	-- progress, taking turns between workers with the same number
+	local function forward(envelope, method, packed_args)
+		local chosen = nil
+		for i = 0, worker_count - 1 do
+			local worker = balanced.workers[(next_worker + i - 1) % worker_count + 1]
+			if worker.ready and (chosen == nil or worker.in_progress < chosen.in_progress) then
+				chosen = worker
+			end
+		end
+		if not chosen then
+			waiting[#waiting + 1] = { envelope, method, packed_args }
+			return
+		end
+		next_worker = chosen.number % worker_count + 1
+		next_id = next_id + 1
+		local id = tostring(next_id)
+		forwarded[id] = { envelope = envelope, worker = chosen }
+		chosen.in_progress = chosen.in_progress + 1
+		chosen.socket:send_all({ id, '', method, packed_args })
+	end
+
+	-- calls from REQ (or DEALER) sockets arrive as the routing envelope, an
+	-- empty delimiter, then the method and arguments
+	loop:add_socket(front, function (socket)
+		local frames = socket:recv_all()
+		local envelope = {}
+		while #frames > 0 and frames[1] ~= '' do
+			envelope[#envelope + 1] = table.remove(frames, 1)
+		end
+		local method, packed_args = frames[2], frames[3]
+		balanced.calls_in_progress = balanced.calls_in_progress + 1
+		if not methods[method] then
+			reply(envelope, messaging.pack(false, 'no method ' .. tostring(method) .. ' in the api'))
+			return
+		end
+		forward(envelope, method, packed_args)
+	end)
+
+	-- replies from workers arrive as the request id, an empty delimiter, then the reply
+	for number = 1, worker_count do
+		local worker = {
+			number = number,
+			in_progress = 0,
+			ready = false,
+			socket = messaging.connect('DEALER', balanced_name(name, number)),
+			control = messaging.connect('PUSH', balanced_name(name, number, 'control')),
+		}
+		loop:add_socket(worker.socket, function (socket)
+			local frames = socket:recv_all()
+			local call = forwarded[frames[1]]
+			if not call then
+				return
+			end
+			forwarded[frames[1]] = nil
+			call.worker.in_progress = call.worker.in_progress - 1
+			reply(call.envelope, frames[3])
+		end)
+		balanced.workers[number] = worker
+	end
+
+	loop:add_socket(balanced.ready_socket, function (socket)
+		local number = tonumber((socket:recv()))
+		balanced.workers[number].ready = true
+		local queued = waiting
+		waiting = {}
+		for _, call in ipairs(queued) do
+			forward(table.unpack(call))
+		end
+	end)
+
+	for number = 1, worker_count do
+		threads.start(balanced_worker_thread, name, number, api, code, ...)
+	end
+
 	registry_request('publish', {
 		name = name,
 		endpoint = messaging.inproc(name),
-		socket_type = client_socket_type,
+		socket_type = 'REQ',
 		api = api,
 	})
-	return service
+	return balanced
 end
 
 -- connecting -------------------------------------------------------------------------------

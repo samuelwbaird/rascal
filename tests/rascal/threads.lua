@@ -43,7 +43,31 @@ expect_error('cannot pass a userdata', threads.start, 'return', { io.stdout })
 local loop = {}
 loop.self = loop
 expect_error('contains itself', threads.start, 'return', loop)
-expect_error('must be a string', threads.start, function () end)
+expect_error('must be a function or a string', threads.start, 42)
+
+-- thread code can be a function, using its arguments, globals and require
+local function_results = messaging.bind('PULL', 'test_threads_function')
+function_results:set_rcvtimeo(5000)
+threads.start(function (name, values)
+	local push = require('rascal.messaging').connect('PUSH', 'test_threads_function')
+	push:send(name .. ' ' .. values[1] + values[2] .. ' ' .. type(class))
+	push:close()
+end, 'function', { 20, 22 })
+expect_equal(function_results:recv(), 'function 42 function')
+function_results:close()
+
+-- but not local variables from outside it
+local outside = 'not passed'
+expect_error("refers to 'outside' from outside it", threads.start, function () print(outside) end)
+expect_error('unable to pass this function', threads.start, print)
+
+-- errors in a function thread report its source file and line
+local function_output = run_rascal_script([[
+	require('rascal.threads').start(function ()
+		error('function thread failure')
+	end)
+]])
+assert(function_output:find('thread failed: [^\n]*:2: function thread failure'), function_output)
 
 -- the main thread waits for its threads after the script, then exits
 expect_equal(run_rascal_script([[

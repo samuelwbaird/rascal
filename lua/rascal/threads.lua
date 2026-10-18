@@ -7,6 +7,10 @@
 -- ]], 'worker', 10)
 -- worker:join()    -- optional, waits for the thread to complete
 --
+-- Thread code can also be a function, passed to the thread with string.dump.
+-- It can use its arguments, globals and require, but not local variables
+-- from outside it, which raises an error (pass them as arguments instead).
+--
 -- Each thread is a new Lua state, set up the same way as the main state
 -- (including init), and every thread shares the process's ZeroMQ context so
 -- inproc:// endpoints work between threads. Arguments are limited to what cmsgpack
@@ -31,10 +35,44 @@ local function traceback(err)
 	return (trace:gsub('\n[^\n]*rascal/threads%.lua.*$', ''))
 end
 
+-- thread code as a string, from a string of Lua source or a function
+function threads.code(code, level)
+	level = (level or 1) + 1
+	if type(code) == 'string' then
+		return code
+	elseif type(code) ~= 'function' then
+		error('threads: thread code must be a function or a string of Lua source', level)
+	end
+	-- only _ENV, the globals, can be an upvalue, as it is the one upvalue set
+	-- when the function is loaded in the new thread
+	for i = 1, math.huge do
+		local name = debug.getupvalue(code, i)
+		if name == nil then
+			break
+		elseif name ~= '_ENV' then
+			error("threads: the function refers to '" .. name .. "' from outside it, pass it as an argument instead", level)
+		end
+	end
+	local ok, dumped = pcall(string.dump, code)
+	if not ok then
+		error('threads: unable to pass this function to a thread: ' .. dumped, level)
+	end
+	return dumped
+end
+
+-- load thread code from threads.code
+function threads.load(code)
+	local fn, err = load(code, '=thread', 'bt')
+	if not fn then
+		error(err, 0)
+	end
+	return fn
+end
+
 -- internal, run in a new thread
 function threads.run_thread(code, packed_args, done_name, id)
 	local ok, err = xpcall(function ()
-		local fn, load_error = load(code, '=thread', 't')
+		local fn, load_error = load(code, '=thread', 'bt')
 		if not fn then
 			error(load_error, 0)
 		end
@@ -82,9 +120,7 @@ local thread_handle = {}
 thread_handle.__index = thread_handle
 
 local function start_thread(code, background, ...)
-	if type(code) ~= 'string' then
-		error('threads: thread code must be a string of Lua source', 3)
-	end
+	code = threads.code(code, 3)
 	local ok, packed_args = pcall(messaging.pack, ...)
 	if not ok then
 		error('threads: ' .. packed_args, 3)
@@ -111,8 +147,8 @@ local function start_thread(code, background, ...)
 	return handle
 end
 
--- start a new thread running code, a string of Lua source, with the
--- arguments available to it as ...
+-- start a new thread running code, a function or a string of Lua source,
+-- with the arguments given to it
 function threads.start(code, ...)
 	return start_thread(code, false, ...)
 end
