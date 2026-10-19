@@ -65,9 +65,10 @@ local log = rawget(_G, 'log') or print
 
 local http = {}
 
--- limits on requests
-http.max_header_size = 64 * 1024
-http.max_body_size = 1024 * 1024
+-- defaults for servers, each can be changed for one server with http.server(options)
+http.max_header_size = 64 * 1024	-- bytes
+http.max_body_size = 1024 * 1024	-- bytes
+http.keep_alive_timeout = 60		-- seconds an idle connection is kept open, or false to keep them
 
 http.status_text = {
 	[100] = 'Continue', [101] = 'Switching Protocols',
@@ -404,14 +405,20 @@ function http.match(pattern, handler)
 end
 
 -- serve the files in a directory, for GET and HEAD requests, using
--- request.path (after any prefix). options.index is the file for paths
--- ending in / (default index.html), options.max_age sets cache-control
+-- request.path (after any prefix). options:
+--   index           the file for paths ending in / (default index.html)
+--   max_age         sets cache-control, for the browser to cache files
+--   cache_seconds   keeps files in memory for that many seconds after they are
+--                   read (off by default), in a weak table, so a cached file
+--                   is also let go whenever the garbage collector runs
 function http.static(directory, options)
 	options = options or {}
 	local index = options.index or 'index.html'
 	if directory:sub(-1) ~= '/' then
 		directory = directory .. '/'
 	end
+	-- filename -> { contents, expires }
+	local cache = options.cache_seconds and setmetatable({}, { __mode = 'v' })
 	return function (request, context)
 		if request.method ~= 'GET' and request.method ~= 'HEAD' then
 			return nil
@@ -424,14 +431,24 @@ function http.static(directory, options)
 		if path:find('%z') or ('/' .. path .. '/'):find('/%.%./') then
 			return nil
 		end
-		local file = io.open(directory .. path, 'rb')
-		if not file then
-			return nil
-		end
-		local contents = file:read('a')
-		file:close()
-		if not contents then
-			return nil -- eg. a directory
+		local filename = directory .. path
+		local cached = cache and cache[filename]
+		local contents
+		if cached and cached.expires > messaging.utc_time() then
+			contents = cached.contents
+		else
+			local file = io.open(filename, 'rb')
+			if not file then
+				return nil
+			end
+			contents = file:read('a')
+			file:close()
+			if not contents then
+				return nil -- eg. a directory
+			end
+			if cache then
+				cache[filename] = { contents = contents, expires = messaging.utc_time() + options.cache_seconds }
+			end
 		end
 		local response = response_class():set_body(contents)
 		response:set_mimetype_from_extension(path:match('%.([^%./]+)$') or '')
@@ -513,18 +530,37 @@ end
 
 local server_class = prelude.class()
 
--- a server, optionally with a first handler
-function http.server(handler)
-	local server = server_class()
-	if handler ~= nil then
-		server:handle(handler)
+local server_options = {
+	max_header_size = true,
+	max_body_size = true,
+	keep_alive_timeout = true,
+}
+
+-- a server, with options to change the defaults above for this server
+-- (max_header_size, max_body_size, keep_alive_timeout)
+function http.server(options)
+	options = options or {}
+	if type(options) ~= 'table' then
+		error('http: http.server takes a table of options', 2)
 	end
-	return server
+	for name in pairs(options) do
+		if not server_options[name] then
+			error('http: unknown server option ' .. tostring(name), 2)
+		end
+	end
+	return server_class(options)
 end
 
-function server_class:init()
+function server_class:init(options)
 	self.handlers = prelude.list()
 	self.connections = {}
+	self.max_header_size = options.max_header_size or http.max_header_size
+	self.max_body_size = options.max_body_size or http.max_body_size
+	if options.keep_alive_timeout ~= nil then
+		self.keep_alive_timeout = options.keep_alive_timeout
+	else
+		self.keep_alive_timeout = http.keep_alive_timeout
+	end
 end
 
 function server_class:handle(handler)
@@ -559,9 +595,28 @@ function server_class:listen(endpoint)
 		local frames = socket:recv_all()
 		self:receive(frames[1], frames[2])
 	end)
+	-- close connections that have been idle too long, checking every second,
+	-- or more often for a short timeout
+	if self.keep_alive_timeout then
+		local interval = math.max(10, math.min(1000, self.keep_alive_timeout * 500))
+		self.idle_timer = messaging.loop():add_interval(interval, function ()
+			self:close_idle()
+		end)
+	end
 	-- lzmq includes the terminating zero byte of the endpoint
 	self.endpoint = socket:get_last_endpoint():gsub('%z$', '')
 	return self.endpoint
+end
+
+-- close connections with no request in progress, that have had nothing
+-- sent or received for longer than the keep-alive timeout
+function server_class:close_idle()
+	local now = messaging.utc_time()
+	for _, connection in pairs(self.connections) do
+		if not connection.busy and now - connection.active > self.keep_alive_timeout then
+			self:close_connection(connection)
+		end
+	end
 end
 
 -- stop listening, and close every connection
@@ -572,6 +627,10 @@ function server_class:close()
 	messaging.loop():remove_socket(self.socket)
 	self.socket:close()
 	self.socket = nil
+	if self.idle_timer then
+		self.idle_timer:reset()
+		self.idle_timer = nil
+	end
 	for _, connection in pairs(self.connections) do
 		connection.closed = true
 	end
@@ -586,13 +645,14 @@ function server_class:receive(id, data)
 			connection.closed = true
 			self.connections[id] = nil
 		else
-			self.connections[id] = { id = id, buffer = '', busy = false, closed = false }
+			self.connections[id] = { id = id, buffer = '', busy = false, closed = false, active = messaging.utc_time() }
 		end
 		return
 	end
 	if not connection or connection.closing then
 		return
 	end
+	connection.active = messaging.utc_time()
 	connection.buffer = connection.buffer .. data
 	if not connection.busy then
 		self:next_request(connection)
@@ -629,12 +689,15 @@ function server_class:next_request(connection)
 	end
 	local parsed, header_length = parser.parse_request(buffer)
 	if parsed == nil then
-		if #buffer > http.max_header_size then
+		if #buffer > self.max_header_size then
 			self:reject(connection, 431)
 		end
 		return
 	elseif parsed == false then
 		self:reject(connection, 400)
+		return
+	elseif header_length > self.max_header_size then
+		self:reject(connection, 431)
 		return
 	end
 
@@ -649,7 +712,7 @@ function server_class:next_request(connection)
 	if not length or length < 0 or math.type(length) ~= 'integer' then
 		self:reject(connection, 400)
 		return
-	elseif length > http.max_body_size then
+	elseif length > self.max_body_size then
 		self:reject(connection, 413)
 		return
 	end
@@ -695,6 +758,7 @@ function server_class:respond(connection, request)
 	end
 	local keep_alive = request.keep_alive and (response.headers.connection or ''):lower() ~= 'close'
 	self:send(connection, response_bytes(response, request, keep_alive))
+	connection.active = messaging.utc_time()
 	if keep_alive then
 		connection.busy = false
 		self:next_request(connection)

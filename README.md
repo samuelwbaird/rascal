@@ -61,6 +61,7 @@ Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on ma
   - **HTTP:** `rascal.http` serves http from one thread with a ZeroMQ STREAM socket, each request handled in its own coroutine.
     - **Handlers:** a handler takes `(request, context, ...)` and returns a response, or nil to let the next handler try. It can be a function, a list, an object with `:handle`, a fixed response, a matcher (`http.prefix`, `http.equal`, `http.match`), or remote: `http.workers(count, build)` runs handlers in balanced worker threads, and `http.service(name)` passes requests to a service.
     - **What crosses threads:** the request travels between threads as data. The `context` is per thread, for live objects.
+    - **Options:** `http.server({ max_header_size, max_body_size, keep_alive_timeout })` overrides the defaults (64KB, 1MB, 60 seconds). `http.static(directory, { cache_seconds = n })` caches files in memory.
     - **Client:** `http.fetch` is a minimal blocking client for tests and local services.
     - **Details:** see the comment at the top of `lua/rascal/http.lua`.
   - **Process exit:** the ZeroMQ context is shared by every thread and is never terminated, so a thread ending never interrupts sockets in other threads, and the process exits promptly.

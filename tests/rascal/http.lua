@@ -115,6 +115,34 @@ expect_equal(static(request('/missing.html'), {}), nil)
 expect_equal(static(request('/../etc/passwd'), {}), nil, 'nothing outside the directory')
 expect_equal(static(http.request({ method = 'POST', path = '/', headers = {} }), {}), nil)
 
+-- static files can be cached in memory for a number of seconds
+local function write_file(name, contents)
+	local file = assert(io.open(static_directory .. '/' .. name, 'w'))
+	file:write(contents)
+	file:close()
+end
+write_file('cached.txt', 'first')
+local cached = http.static(static_directory, { cache_seconds = 0.2 })
+local uncached = http.static(static_directory)
+collectgarbage('stop')
+expect_equal(cached(request('/cached.txt'), {}).body, 'first')
+write_file('cached.txt', 'second')
+expect_equal(cached(request('/cached.txt'), {}).body, 'first', 'from the cache')
+expect_equal(uncached(request('/cached.txt'), {}).body, 'second', 'not cached by default')
+loop:sleep_ex(250)
+expect_equal(cached(request('/cached.txt'), {}).body, 'second', 'read again once expired')
+collectgarbage('restart')
+-- the cache is a weak table, so the garbage collector lets cached files go
+write_file('cached.txt', 'third')
+collectgarbage()
+expect_equal(cached(request('/cached.txt'), {}).body, 'third', 'read again once collected')
+os.remove(static_directory .. '/cached.txt')
+
+-- server options
+expect_error('unknown server option', http.server, { max_body = 10 })
+expect_error('unknown server option', http.server, { function () end })
+expect_error('takes a table of options', http.server, 'not options')
+
 -- a server over the network ----------------------------------------------------------------
 
 local server = http.server()
@@ -129,7 +157,7 @@ end)
 server:equal('/close', function (request)
 	return http.response('closing'):set_header('connection', 'close')
 end)
-server:equal('/fail', function () error('handler failure') end)
+server:equal('/fail', function () error('simulate handler failure') end)
 server:equal('/wait', function (request)
 	coroutine.yield(tonumber(request.vars.ms))
 	return http.text('waited ' .. request.vars.ms)
@@ -142,7 +170,7 @@ local workers = http.workers(2, function (number)
 		http.equal('who', function (request, context)
 			return http.json({ worker = number, user = request.user, context_user = context.user or false })
 		end),
-		http.equal('fail', function () error('worker failure') end),
+		http.equal('fail', function () error('simulate worker failure') end),
 		-- anything else is not handled here, so falls through to the server's next handler
 	}
 end)
@@ -154,9 +182,14 @@ end)
 server:prefix('/workers/', 'fell through from the workers')
 
 local endpoint = server:listen('tcp://127.0.0.1:*')
+
+-- a second server, with its own limits and a short keep-alive timeout
+local limited = http.server({ max_header_size = 200, max_body_size = 10, keep_alive_timeout = 0.2 })
+limited:equal('/echo', function (request) return http.text(request.body) end)
+local limited_endpoint = limited:listen('tcp://127.0.0.1:*')
 local results = messaging.bind('PULL', 'test_http_results')
 
-threads.start(function (port)
+threads.start(function (port, limited_port)
 	local http = require('rascal.http')
 	local messaging = require('rascal.messaging')
 	local cjson = require('cjson')
@@ -221,10 +254,26 @@ threads.start(function (port)
 	-- connection: close in a response closes the connection
 	report.close = http.fetch('GET', base .. '/close').body
 
+	-- the second server's limits
+	local limited_base = 'http://127.0.0.1:' .. limited_port
+	report.limited_ok = http.fetch('POST', limited_base .. '/echo', '0123456789').body
+	report.limited_body = http.fetch('POST', limited_base .. '/echo', '0123456789x').status
+	report.limited_header = http.fetch('GET', limited_base .. '/echo', nil, { ['x-long'] = string.rep('x', 200) }).status
+
+	-- an idle connection is closed after its keep-alive timeout
+	socket = messaging.socket('STREAM')
+	socket:set_rcvtimeo(5000)
+	socket:connect('tcp://127.0.0.1:' .. limited_port)
+	id = socket:recv_all()[1]
+	local idle_started = messaging.utc_time()
+	local closed = socket:recv_all()
+	report.idle_closed = closed and closed[2] == '' and messaging.utc_time() - idle_started
+	socket:close()
+
 	local push = messaging.connect('PUSH', 'test_http_results')
 	push:send(cjson.encode(report))
 	push:close()
-end, endpoint:match(':(%d+)$'))
+end, endpoint:match(':(%d+)$'), limited_endpoint:match(':(%d+)$'))
 
 -- the server runs on this thread's loop, so wait by running the loop
 local message = nil
@@ -235,6 +284,7 @@ while not message and messaging.utc_time() - started < 10 do
 end
 results:close()
 server:close()
+limited:close()
 workers:close()
 local report = require('cjson').decode((assert(message, 'no report from the http client thread')))
 
@@ -254,6 +304,10 @@ expect_equal(report.head, '200 ', 'a HEAD response has no body')
 expect_equal(report.invalid, '400 Bad Request')
 expect_equal(report.header_too_large, '431')
 expect_equal(report.close, 'closing')
+expect_equal(report.limited_ok, '0123456789')
+expect_equal(report.limited_body, 413)
+expect_equal(report.limited_header, 431)
+assert(report.idle_closed and report.idle_closed > 0.1 and report.idle_closed < 1.5, 'an idle connection was not closed after its timeout: ' .. tostring(report.idle_closed))
 
 os.remove(static_directory .. '/index.html')
 os.remove(static_directory .. '/data.json')
