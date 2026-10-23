@@ -4,6 +4,8 @@
 #   make test         build, run the test suite and check linkage
 #   make fetch        download and unpack all dependency sources only
 #   make dist         stripped binary + licences in dist/rascal-<version>-<platform>/
+#   make release      the same, as dist/rascal-<version>-<platform>.tar.gz
+#   make dependencies-archive   every dependency download, for offline builds
 #   make install      install to $(PREFIX)/bin (default /usr/local), see below
 #   make uninstall    remove what make install installed
 #   make info         show platform, options and pinned dependency versions
@@ -157,7 +159,7 @@ $(OBJ)/host/host_stub.o: tools/host_stub.c config.mk $(ALL_STAMPS)
 # -----------------------------------------------------------------------------
 # convenience targets
 
-.PHONY: fetch test check-linkage licenses dist install uninstall info clean distclean
+.PHONY: fetch test check-linkage licenses dist release dependencies-archive install uninstall info version clean distclean
 
 fetch: $(ALL_STAMPS)
 
@@ -191,6 +193,21 @@ dist: $(RASCAL) $(BUILD)/LICENSES.txt
 	@strip $(DIST)/rascal
 	@echo "packaged $(DIST)"
 
+# the release archive for this platform, as attached to a GitHub release
+release: dist
+	@tar $(ARCHIVE_FLAGS) -czf $(DIST).tar.gz -C dist $(notdir $(DIST))
+	@echo "packaged $(DIST).tar.gz"
+
+# every dependency's downloaded archive, named as scripts/fetch.sh caches them,
+# so that extracting this into build/ allows building without the network:
+#   tar -xf rascal-<version>-dependencies.tar -C build
+DEPENDENCY_DOWNLOADS = $(foreach d,$(DEPS),downloads/$(d)-$(shell echo $($(d)_SHA256) | cut -c1-16).tar.gz)
+
+dependencies-archive: $(ALL_STAMPS)
+	@mkdir -p dist
+	@tar $(ARCHIVE_FLAGS) -cf dist/rascal-$(VERSION)-dependencies.tar -C $(BUILD_ROOT) $(DEPENDENCY_DOWNLOADS)
+	@echo "packaged dist/rascal-$(VERSION)-dependencies.tar"
+
 # PREFIX sets the install location, and DESTDIR stages the install under
 # another root for packaging, eg. make install PREFIX=$HOME/.local
 # the installed binary is stripped unless DEBUG=1
@@ -210,6 +227,9 @@ install: $(RASCAL) $(BUILD)/LICENSES.txt
 uninstall:
 	rm -f $(INSTALL_BIN)/rascal
 	rm -rf $(INSTALL_DOC)
+
+version:
+	@echo $(VERSION)
 
 info:
 	@echo "rascal $(VERSION)"

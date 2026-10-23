@@ -50,6 +50,10 @@ LUA_ENV_DEFS := \
 	-DLUA_PATH_DEFAULT='"./?.lua;./?/init.lua"' -DLUA_CPATH_DEFAULT='"./?.so"'
 
 ifeq ($(UNAME_S),Darwin)
+  # the oldest macOS the executable runs on, whatever it is built on
+  export MACOSX_DEPLOYMENT_TARGET ?= 12.0
+  # archives made here leave out macOS file attributes, which other systems warn about
+  ARCHIVE_FLAGS := --no-mac-metadata --no-xattrs
   LUA_DEFS := -DLUA_COMPAT_5_3 $(LUA_ENV_DEFS) -DLUA_USE_MACOSX
   LIBS :=
   HOST_LIBS :=

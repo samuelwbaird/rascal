@@ -20,7 +20,7 @@ zeromq_CONFIGURE := \
 	--without-libsodium --without-libgssapi_krb5 \
 	--without-pgm --without-norm --without-vmci
 
-$(zeromq_LIB): $(call stamp,zeromq)
+$(zeromq_LIB): $(call stamp,zeromq) config.mk deps/zeromq.mk
 	@echo "  BUILD zeromq $(zeromq_VERSION) (log: $(BUILD)/zeromq/build.log)"
 	@mkdir -p $(@D)
 	@cd $(SRC)/zeromq && ./configure $(zeromq_CONFIGURE) \

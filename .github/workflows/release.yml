@@ -1,0 +1,82 @@
+# build, test and release rascal when a version tag is pushed, eg.
+#   git tag v0.1.0 && git push origin v0.1.0
+# the tag must match VERSION in the Makefile
+#
+# the release has, for each platform, rascal-<version>-<platform>.tar.gz
+# (the executable and its LICENSES.txt), rascal-<version>-dependencies.tar
+# (every dependency download, for building from source without the network)
+# and SHA256SUMS for all of them
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15            # darwin-arm64
+          - runner: macos-15-intel      # darwin-x86_64
+          - runner: ubuntu-24.04        # linux-x86_64-static, built in Alpine
+            container: true
+          - runner: ubuntu-24.04-arm    # linux-aarch64-static, built in Alpine
+            container: true
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the version
+        run: test "v$(make -s version)" = "$GITHUB_REF_NAME"
+
+      - name: Build, test and package (macOS)
+        if: ${{ !matrix.container }}
+        run: make -j4 test release
+
+      - name: Build, test and package (Linux, fully static)
+        if: ${{ matrix.container }}
+        run: scripts/docker-build.sh alpine all test release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rascal-${{ matrix.runner }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  dependencies:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make dependencies-archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rascal-dependencies
+          path: dist/*-dependencies.tar
+          if-no-files-found: error
+
+  release:
+    needs: [build, dependencies]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: release
+        run: sha256sum rascal-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "rascal ${GITHUB_REF_NAME#v}" \
+            --generate-notes

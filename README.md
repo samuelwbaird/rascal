@@ -9,6 +9,23 @@ make test     # runs the test suite and checks the binary's linkage
 
 Requirements are `make`, a C and C++ compiler, `curl` and `tar`. It builds on macOS and Linux. Everything else is downloaded at pinned versions, checked against a sha256, and compiled from source.
 
+## Installing
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/samuelwbaird/rascal/main/install.sh | sh
+```
+
+`install.sh` installs the latest release for macOS (arm64, x86_64) or Linux (x86_64, aarch64). The Linux executables are fully static, so they run on any distribution, or in any container. It installs to `~/.local/bin`, or `/usr/local/bin` as root.
+- **Settings:** `PREFIX=...` to install elsewhere, and `RASCAL_VERSION=0.1.0` for a particular release.
+- **Without a prebuilt executable,** or with `RASCAL_FROM_SOURCE=1`, it builds from source. That needs make, a C and C++ compiler and tar. Each release includes every dependency's download, so a source build only needs GitHub.
+
+Releases can also be downloaded from https://github.com/samuelwbaird/rascal/releases. Each has:
+- the executable and its licences for each platform
+- `rascal-<version>-dependencies.tar`, for building from source offline: extract it into `build/`, then `make`
+- `SHA256SUMS`
+
+To build from a clone instead, use `make && make install`. That needs `xcode-select --install` on macOS, or eg. `apt-get install build-essential curl` or `apk add build-base linux-headers curl` on Linux.
+
 ## What's included
 
 | require | from | version |
@@ -216,6 +233,8 @@ DOCKER_PLATFORM=linux/amd64 scripts/docker-build.sh alpine   # x86_64 from Apple
 | --- | --- |
 | `make install` | install the stripped binary to `$PREFIX/bin` (default `/usr/local`) and licences to `$PREFIX/share/doc/rascal`; `DESTDIR` is supported for packaging |
 | `make uninstall` | remove what `make install` installed, with the same `PREFIX` / `DESTDIR` |
+| `make release` | the same as `make dist`, packaged as `dist/rascal-<version>-<platform>.tar.gz` |
+| `make dependencies-archive` | every dependency download in `dist/rascal-<version>-dependencies.tar` |
 | `make dist` | stripped binary and `LICENSES.txt` in `dist/rascal-<version>-<platform>/` |
 | `make fetch` | download and unpack sources only, eg. before going offline |
 | `make clean` | remove this platform's build directory, keeping downloads |
@@ -223,6 +242,18 @@ DOCKER_PLATFORM=linux/amd64 scripts/docker-build.sh alpine   # x86_64 from Apple
 | `DEBUG=1` | `-O0 -g`, and `make install` leaves the binary unstripped |
 | `PREFIX=` | install location, eg. `make install PREFIX=$HOME/.local` |
 | `CC=`, `CXX=`, `CFLAGS=` | the usual |
+
+## Releasing
+
+Releases are built by `.github/workflows/release.yml` when a version tag is pushed. To release:
+1. Set `VERSION` in the Makefile, and commit.
+2. Tag the commit and push the tag:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The workflow checks that the tag matches `VERSION`. It then builds, tests and packages each platform, adds the dependencies archive and checksums, and creates the GitHub release. macOS builds run on macOS 12 and later (`MACOSX_DEPLOYMENT_TARGET`).
 
 ## Notes
 
