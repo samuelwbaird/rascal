@@ -161,3 +161,13 @@ end)
 ```
 
 `store:transaction(fn, ...)`, `store:begin_transaction()`, `store:commit_transaction()` and `store:abort_transaction()` work as they do for a [database](rascal.database.md#transactions). Transactions don't nest, but stowage methods called within a transaction become part of it.
+
+For a tick based server, keep a transaction open and commit it periodically with `store:commit_pending()`, which commits only if anything has been written, and `store:has_changes()`. See [db:commit_pending](rascal.database.md#dbcommit_pending).
+
+```lua
+store:begin_transaction()
+loop:add_interval(250, function ()
+	world:tick()
+	store:commit_pending()
+end)
+```

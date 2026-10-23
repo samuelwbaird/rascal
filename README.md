@@ -81,6 +81,7 @@ To build from a clone instead, use `make && make install`. That needs `xcode-sel
 | `rascal.services` | serve objects as named services (REQ/REP, ROUTER, DEALER, PUSH/PULL, PUB/SUB), including balanced across worker threads | |
 | `rascal.http` | an HTTP server, with handlers in the server thread or in worker threads, and a minimal client | |
 | `rascal.http.parser` | [picohttpparser](https://github.com/h2o/picohttpparser), parsing HTTP requests and responses | 1.4+ |
+| `rascal.crypto` | hashing, HMAC, hex and base64, and secure random values, with digests from [Mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | 3.6.7 |
 | `rascal.build` | build information, see [rascal.build](docs/modules/rascal.build.md) | |
 
 `make info` lists the pinned versions.

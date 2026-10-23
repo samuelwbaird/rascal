@@ -16,6 +16,7 @@ rascal's own Lua modules, embedded in the executable.
 | [rascal.http](modules/rascal.http.md) | an HTTP server, handlers, requests and responses, and a minimal client |
 | [rascal.database](modules/rascal.database.md) | simple SQLite access |
 | [rascal.stowage](modules/rascal.stowage.md) | a key value store with a log and reverse index per key |
+| [rascal.crypto](modules/rascal.crypto.md) | hashing, HMAC, encodings and secure random values |
 | [rascal.build](modules/rascal.build.md) | what the executable was built with |
 
 ## Technical reference
@@ -57,3 +58,4 @@ Each is downloaded at a pinned version, checked against its sha256 and compiled 
 | lua-cmsgpack | `cmsgpack` | [lua-cmsgpack](https://github.com/antirez/lua-cmsgpack#readme) |
 | LuaFileSystem | `lfs` | [LuaFileSystem manual](https://lunarmodules.github.io/luafilesystem/manual.html) |
 | picohttpparser | `rascal.http.parser` | [picohttpparser](https://github.com/h2o/picohttpparser#readme) |
+| Mbed TLS | `rascal.crypto.core` | [Mbed TLS documentation](https://mbed-tls.readthedocs.io/) |

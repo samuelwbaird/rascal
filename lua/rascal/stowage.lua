@@ -54,6 +54,11 @@
 --   abort_transaction
 --   commit_transaction
 --   transaction(fn)
+--
+-- or a transaction kept open to batch writes, eg. committed each tick
+--
+--   has_changes
+--   commit_pending
 
 local prelude = require('prelude')
 -- sqlite is the backing store
@@ -337,6 +342,16 @@ end
 
 function stowage:transaction(fn, ...)
 	return self.db:transaction(fn, ...)
+end
+
+-- for a transaction kept open to batch writes, eg. in a tick based server,
+-- see database:commit_pending
+function stowage:has_changes()
+	return self.db:has_changes()
+end
+
+function stowage:commit_pending()
+	return self.db:commit_pending()
 end
 
 -- internal, create the tables and indexes if required ---------------------------

@@ -149,3 +149,4 @@ Each dependency was chosen to be small, portable C that builds without its own b
 - **lzmq** has had no release since 2016. rascal uses its last upstream commit, plus one patch adding a missing include ([`patches/lzmq`](../../patches/lzmq)).
 - **libzmq** is built with its own configure script, with every optional feature off. Anything it detected on the build machine would otherwise become a dynamic dependency of the executable.
 - **SQLite** is compiled with FTS5, R*Tree, GEOPOLY, math functions and other options, see [dependencies](../dependencies.md#sqlite).
+- **Mbed TLS** is compiled with only its digest, HMAC and base64 sources, by a configuration of rascal's own, for [rascal.crypto](../modules/rascal.crypto.md). It's the library rascal would also use for TLS, if outgoing HTTPS is added later. Secure random values are read from `/dev/urandom` rather than through Mbed TLS.

@@ -102,6 +102,24 @@ end)
 
 The same, as separate steps. Transactions don't nest: beginning one while in a transaction raises an error, as does committing or aborting outside one.
 
+### db:commit_pending()
+
+For a transaction kept open to batch writes, eg. in a tick based game server, where committing every write separately would be slow. If anything has been written since the transaction began, it commits, begins a new transaction straight away, and returns true. Otherwise it does nothing, and returns false. It raises an error outside a transaction.
+
+```lua
+db:begin_transaction()
+loop:add_interval(250, function ()
+	world:tick()                -- any number of writes, all in the open transaction
+	db:commit_pending()         -- commits, only if anything was written
+end)
+```
+
+Writes since the last commit are lost if the process stops, so this trades a little durability for speed. Closing the database doesn't commit an open transaction, so commit it first if its writes should be kept.
+
+### db:has_changes()
+
+True if the open transaction has inserted, updated or deleted any rows, and false outside a transaction. Changes to the schema, eg. creating a table, aren't counted.
+
 ## Common queries
 
 Table and column names are quoted, so any name can be used. Values are always bound. Each returns the result of its query, unless noted.

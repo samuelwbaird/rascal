@@ -98,6 +98,19 @@ assert(not ok)
 expect_equal(db:get_value('doomed'), nil)
 expect_equal(db:reverse_query_one('doomed:ref'), nil)
 
+-- a transaction kept open to batch writes, as in a tick based server, where
+-- stowage methods become part of it and are committed with commit_pending
+db:begin_transaction()
+expect_equal(db:commit_pending(), false, 'nothing to commit')
+db:set_value('ticked', 1)
+db:log_append('ticked', 'tick')
+expect_equal(db:has_changes(), true)
+expect_equal(db:commit_pending(), true)
+db:set_value('ticked', 2)
+db:abort_transaction()
+expect_equal(db:get_value('ticked'), 1, 'the committed tick is kept, the aborted one is not')
+expect_equal(#db:log_read('ticked'), 1)
+
 db:close()
 
 -- a smaller version of the old dweeb stowage example: cats patting mice

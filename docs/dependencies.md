@@ -111,6 +111,17 @@ To add another, see [Adding dependencies](technical/adding-dependencies.md).
 | Documentation | [picohttpparser README](https://github.com/h2o/picohttpparser#readme) |
 | Declared in | [`deps/picohttpparser.mk`](../deps/picohttpparser.mk) |
 
+## Mbed TLS
+
+| | |
+| --- | --- |
+| Version | 3.6.7, the 3.6 long term support line |
+| require | `rascal.crypto.core`, rascal's own binding in [`src/crypto.c`](../src/crypto.c), used by [rascal.crypto](modules/rascal.crypto.md) |
+| Used for | message digests (MD5, SHA-1, SHA-2), HMAC and base64. Only those sources are compiled, configured by [`src/rascal_mbedtls_config.h`](../src/rascal_mbedtls_config.h), so it adds about 23KB and no TLS |
+| Home | https://www.trustedfirmware.org/projects/mbed-tls/ |
+| Documentation | [Mbed TLS documentation](https://mbed-tls.readthedocs.io/), and its [API reference](https://mbed-tls.readthedocs.io/projects/api/en/development/) |
+| Declared in | [`deps/mbedtls.mk`](../deps/mbedtls.mk) |
+
 ## prelude
 
 [prelude](https://github.com/samuelwbaird/prelude) is embedded from [`lua/prelude.lua`](../lua/prelude.lua) rather than downloaded. It is documented with rascal's own modules, in [prelude](modules/prelude.md).

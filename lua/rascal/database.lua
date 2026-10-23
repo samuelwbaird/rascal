@@ -220,6 +220,28 @@ function database:begin_transaction()
 	end
 	self:query('BEGIN TRANSACTION')
 	self.in_transaction = true
+	-- rows changed on this connection so far, to tell if this transaction has written anything
+	self.changes_at_begin = self.sqlite:total_changes()
+end
+
+-- true if the open transaction has inserted, updated or deleted any rows
+function database:has_changes()
+	return self.in_transaction and self.sqlite:total_changes() ~= self.changes_at_begin
+end
+
+-- for a transaction kept open to batch writes, eg. in a tick based server:
+-- commit and begin a new transaction if anything has been written, otherwise
+-- do nothing. Returns true if it committed
+function database:commit_pending()
+	if not self.in_transaction then
+		error('database: commit_pending when not in a transaction', 2)
+	end
+	if not self:has_changes() then
+		return false
+	end
+	self:commit_transaction()
+	self:begin_transaction()
+	return true
 end
 
 function database:commit_transaction()
