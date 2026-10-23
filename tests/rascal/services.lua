@@ -11,7 +11,7 @@ end
 
 -- a service served from another thread, which is started after the client
 -- begins waiting for it
-threads.start([[
+threads.start(function ()
 	require('rascal.messaging').loop():add_once(50, function ()
 		local services = require('rascal.services')
 		local store = { values = {} }
@@ -30,7 +30,7 @@ threads.start([[
 		services.serve('test_store', 'REP', api, store)
 		services.serve('test_store_push', 'PULL', { set = api.set }, store)
 	end)
-]])
+end)
 
 -- request and reply, values by position
 local store = services.connect('test_store')
@@ -44,7 +44,7 @@ expect_equal(d, true)
 expect_equal(select('#', store:echo(1, 2, 3)), 3)
 
 -- errors are returned to the caller, with the service's stack trace
-expect_error('services: test_store:fail failed: thread:%d+: deliberate', store.fail, store, 'deliberate')
+expect_error('services: test_store:fail failed: [^\n]*services%.lua:%d+: deliberate', store.fail, store, 'deliberate')
 expect_error('unable to return the result', store.unsendable, store)
 expect_error('cannot pass a function', store.set, store, 'bad', print)
 -- the connection is still usable after errors
@@ -68,12 +68,13 @@ expect_equal(services.find('test_no_such_service'), nil)
 -- publish and subscribe: a subscriber thread forwards what it receives
 local received = messaging.bind('PULL', 'test_services_received')
 received:set_rcvtimeo(5000)
-threads.start([[
+threads.start(function ()
 	local services = require('rascal.services')
 	local messaging = require('rascal.messaging')
 	local forward = messaging.connect('PUSH', 'test_services_received')
 	-- only some of the published methods are handled
 	local subscriber = {}
+	local subscription
 	-- the first ping received shows the subscription is connected
 	function subscriber:ping()
 		if not self.ready then
@@ -89,7 +90,7 @@ threads.start([[
 		end
 	end
 	subscription = services.subscribe('test_events', subscriber)
-]])
+end)
 local events = services.serve('test_events', 'PUB', {
 	ping = '',
 	moved = 'name:string, x:number, y:number',
@@ -131,9 +132,10 @@ expect_error('use services.connect', services.subscribe, 'test_store', {})
 publisher:close()
 
 -- ROUTER services run each call as a coroutine, so a method can yield
-threads.start([[
+threads.start(function ()
 	local services = require('rascal.services')
 	local slow = {}
+	local slow_service
 	function slow:wait(milliseconds, label)
 		coroutine.yield(milliseconds)
 		return label, milliseconds
@@ -158,25 +160,24 @@ threads.start([[
 		fail = '',
 		stop = '',
 	}, slow)
-]])
+end)
 local slow = services.connect('test_slow')
 expect_equal(services.find('test_slow').socket_type, 'REQ', 'callers use REQ as for REP')
 expect_equal(slow:quick(), 'quick')
 local label, milliseconds = slow:wait(10, 'waited')
 expect_equal(label, 'waited')
 expect_equal(milliseconds, 10)
-expect_error('services: test_slow:fail failed: thread:%d+: failed after yielding', slow.fail, slow)
+expect_error('services: test_slow:fail failed: [^\n]*services%.lua:%d+: failed after yielding', slow.fail, slow)
 
 -- calls from several callers are in progress at the same time
 local done = messaging.bind('PULL', 'test_slow_done')
 done:set_rcvtimeo(5000)
-local caller = [[
-	local wait = ...
+local function caller(wait)
 	local result = require('rascal.services').connect('test_slow'):wait(wait, 'caller ' .. wait)
 	local push = require('rascal.messaging').connect('PUSH', 'test_slow_done')
 	push:send(result)
 	push:close()
-]]
+end
 local started = messaging.utc_time()
 for _, wait in ipairs({ 400, 401, 402 }) do
 	threads.start(caller, wait)
@@ -208,7 +209,7 @@ wait_until(function () return services.find('test_slow') == nil end)
 expect_equal(services.find('test_slow'), nil, 'closed once the call in progress replied')
 
 -- DEALER connections park only the calling coroutine until the reply arrives
-threads.start([[
+threads.start(function ()
 	local services = require('rascal.services')
 	local async = {}
 	function async:wait(milliseconds, label)
@@ -220,7 +221,7 @@ threads.start([[
 		wait = 'milliseconds:number, label:string -> label:string',
 		fail = '',
 	}, async)
-]])
+end)
 local dealer = services.connect('test_async', 'DEALER')
 expect_error('must be made from within a coroutine', dealer.wait, dealer, 1, 'outside')
 
@@ -263,14 +264,15 @@ expect_error('connect with REQ or DEALER', services.connect, 'test_async', 'ROUT
 -- an idle DEALER connection does not keep its thread running
 expect_equal(run_rascal_script([[
 	local services = require('rascal.services')
-	require('rascal.threads').start([==[
+	require('rascal.threads').start(function ()
 		local echo = {}
+		local echo_service
 		function echo:echo(text)
 			echo_service:close()
 			return text
 		end
 		echo_service = require('rascal.services').serve('echo', 'ROUTER', { echo = 'text:string -> text:string' }, echo)
-	]==])
+	end)
 	local echo = services.connect('echo', 'DEALER')
 	loop:schedule(function ()
 		print(echo:echo('echoed'))
@@ -379,11 +381,14 @@ expect_equal(run_rascal_script([[
 	local services = require('rascal.services')
 	local threads = require('rascal.threads')
 	local control = {}
+	local service
 	function control:stop()
 		print('stopping')
 		service:close()
 	end
 	service = services.serve('control', 'REP', { stop = '' }, control)
-	threads.start("require('rascal.services').connect('control'):stop()")
+	threads.start(function ()
+		require('rascal.services').connect('control'):stop()
+	end)
 	print('serving')
 ]]), 'serving\nstopping')

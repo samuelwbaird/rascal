@@ -75,8 +75,7 @@ end)
 
 -- the queue thread, which starts the workers -----------------------------------------------
 
-threads.start([==[
-	local worker_count = ...
+local function queue_thread(worker_count)
 	local prelude = require('prelude')
 	local services = require('rascal.services')
 	local threads = require('rascal.threads')
@@ -131,21 +130,24 @@ threads.start([==[
 	}, queue)
 
 	-- the workers, each asking for one job at a time until there are no more
-	for i = 1, worker_count do
-		threads.start([=[
-			local name = ...
-			local services = require('rascal.services')
-			local jobs = services.connect('work_queue.jobs')
-			local results = services.connect('work_queue.results')
+	local function worker_thread(name)
+		local services = require('rascal.services')
+		local jobs = services.connect('work_queue.jobs')
+		local results = services.connect('work_queue.results')
 
-			local job = jobs:next_job()
-			while job do
-				results:completed(name, job.id, job.id * job.id)
-				job = jobs:next_job()
-			end
-		]=], 'worker ' .. i)
+		local job = jobs:next_job()
+		while job do
+			results:completed(name, job.id, job.id * job.id)
+			job = jobs:next_job()
+		end
 	end
-]==], worker_count)
+
+	for i = 1, worker_count do
+		threads.start(worker_thread, 'worker ' .. i)
+	end
+end
+
+threads.start(queue_thread, worker_count)
 
 -- queue the jobs ---------------------------------------------------------------------------
 

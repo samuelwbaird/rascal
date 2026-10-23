@@ -17,6 +17,10 @@
 -- The server's frames, and each client's play, are each a loop in a coroutine
 -- (see loop:schedule), waiting between steps with coroutine.yield(milliseconds).
 --
+-- Each thread is a function, passed to threads.start with its arguments. The
+-- function runs in a new Lua state, so it requires what it uses, rather than
+-- using local variables from this file.
+--
 -- The game ends after a set number of frames: the server publishes game over
 -- and closes its services, and each client stops when it sees game over, so
 -- every thread completes and the process exits.
@@ -29,8 +33,7 @@ local client_count = 3
 
 -- the game server ----------------------------------------------------------------------------
 
-local game_world_thread = [==[
-	local frames_per_second, game_seconds = ...
+local function game_world_thread(frames_per_second, game_seconds)
 	local prelude = require('prelude')
 	local services = require('rascal.services')
 
@@ -100,12 +103,11 @@ local game_world_thread = [==[
 		input_service:close()
 		leaderboard_service:close()
 	end)
-]==]
+end
 
 -- a game client ------------------------------------------------------------------------------
 
-local game_client_thread = [==[
-	local join_delay, input_interval = ...
+local function game_client_thread(join_delay, input_interval)
 	local services = require('rascal.services')
 
 	local client = {
@@ -154,7 +156,7 @@ local game_client_thread = [==[
 			coroutine.yield(input_interval)
 		end
 	end)
-]==]
+end
 
 -- start the game, then the clients -------------------------------------------------------------
 

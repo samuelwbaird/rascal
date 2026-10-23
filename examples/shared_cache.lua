@@ -33,9 +33,11 @@ local pages = { '/', '/about', '/news', '/contact' }
 local run_milliseconds = 2000
 
 -- the cache client, used in each thread ------------------------------------------------------
--- (passed to each thread as source here, in an application it could sit in one of its own files)
+-- A function cannot be passed to a thread as an argument, but threads.code turns
+-- this one into a value that can be, and threads.load turns it back into the
+-- function in each thread. In an application this could be one of its own modules.
 
-local cache_client_source = [==[
+local function cache_client_class()
 	local prelude = require('prelude')
 	local services = require('rascal.services')
 
@@ -84,12 +86,13 @@ local cache_client_source = [==[
 	end
 
 	return cache_client
-]==]
+end
+
+local cache_client_code = threads.code(cache_client_class)
 
 -- the cache server ---------------------------------------------------------------------------
 
-local cache_server_thread = [==[
-	local run_milliseconds = ...
+local function cache_server_thread(run_milliseconds)
 	local services = require('rascal.services')
 
 	local cache = {
@@ -129,16 +132,15 @@ local cache_server_thread = [==[
 		get_service:close()
 		invalidate:close()
 	end)
-]==]
+end
 
 -- the editor, rendering pages into the cache -------------------------------------------------
 
-local editor_thread = [==[
-	local cache_client_source, pages, run_milliseconds = ...
+local function editor_thread(cache_client_code, pages, run_milliseconds)
 	local prelude = require('prelude')
 	local messaging = require('rascal.messaging')
 
-	local cache_client = load(cache_client_source, '=cache_client')()
+	local cache_client = require('rascal.threads').load(cache_client_code)()
 	local cache = cache_client()
 	local versions = {}
 
@@ -175,16 +177,15 @@ local editor_thread = [==[
 		log('editor made ' .. edits .. ' edits')
 		cache:close()
 	end)
-]==]
+end
 
 -- a web worker, serving requests for pages from the cache ------------------------------------
 
-local web_worker_thread = [==[
-	local name, cache_client_source, pages, run_milliseconds = ...
+local function web_worker_thread(name, cache_client_code, pages, run_milliseconds)
 	local prelude = require('prelude')
 	local messaging = require('rascal.messaging')
 
-	local cache_client = load(cache_client_source, '=cache_client')()
+	local cache_client = require('rascal.threads').load(cache_client_code)()
 	local cache = cache_client()
 	local paths = prelude.list(pages)
 	local served, not_found = 0, 0
@@ -206,12 +207,12 @@ local web_worker_thread = [==[
 			.. cache.from_server .. ' from the cache server')
 		cache:close()
 	end)
-]==]
+end
 
 -- start the cache server, the editor and the web workers ------------------------------------
 
 threads.start(cache_server_thread, run_milliseconds)
-threads.start(editor_thread, cache_client_source, pages, run_milliseconds)
+threads.start(editor_thread, cache_client_code, pages, run_milliseconds)
 for i = 1, 2 do
-	threads.start(web_worker_thread, 'web worker ' .. i, cache_client_source, pages, run_milliseconds)
+	threads.start(web_worker_thread, 'web worker ' .. i, cache_client_code, pages, run_milliseconds)
 end

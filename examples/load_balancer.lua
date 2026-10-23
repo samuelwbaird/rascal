@@ -30,6 +30,8 @@ local client_count = 4
 local lookups_per_client = 30
 
 -- a backend ----------------------------------------------------------------------------------
+-- (thread code can be a string of Lua source as well as a function, as here,
+-- with its arguments as ...)
 
 local backend_thread = [==[
 	local name, milliseconds = ...
@@ -57,8 +59,7 @@ local backend_thread = [==[
 
 -- the balancer -------------------------------------------------------------------------------
 
-local balancer_thread = [==[
-	local backend_names, client_count = ...
+local function balancer_thread(backend_names, client_count)
 	local prelude = require('prelude')
 	local services = require('rascal.services')
 
@@ -111,12 +112,11 @@ local balancer_thread = [==[
 		lookup = 'key:string -> value:string',
 		finished = '',
 	}, balancer)
-]==]
+end
 
 -- a client -----------------------------------------------------------------------------------
 
-local client_thread = [==[
-	local name, lookups = ...
+local function client_thread(name, lookups)
 	local services = require('rascal.services')
 
 	local lookup = services.connect('lookup')
@@ -125,7 +125,7 @@ local client_thread = [==[
 	end
 	lookup:finished()
 	log(name .. ' made ' .. lookups .. ' lookups')
-]==]
+end
 
 -- start the backends, the balancer, then the clients ------------------------------------------
 

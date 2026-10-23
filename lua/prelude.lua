@@ -415,15 +415,12 @@ end
 -- @param ... Optionally the second object in the chain and so on
 -- @return A new proxy
 function prelude.proxy_chain(obj1, ...)
-	local chain = list.pack(obj1, ...)
+	local chain = prelude.list.pack(obj1, ...)
 	local top_level_proxy = {}
 	return setmetatable(top_level_proxy, {
 		__index = function (t, k)
 			for _, obj in ipairs(chain) do
 				local value = obj[k]
-				if value then
-					return value
-				end
 				if type(value) == 'function' then
 					-- substitute the proxy for the original object in any arguments of the function
 					-- set a proxy function that will sub "self" when required
@@ -435,9 +432,9 @@ function prelude.proxy_chain(obj1, ...)
 					end
 					rawset(top_level_proxy, k, proxy_function)
 					return proxy_function
-				elseif value then
+				elseif value ~= nil then
 					return value
-				end				
+				end
 			end
 		end,
 	})
@@ -485,7 +482,7 @@ end
 -- @section utility
 
 -- private method, encode Lua values as strings into table
-function encode_value(value, output, indent, pretty)
+local function encode_value(value, output, indent, pretty)
 	local t = type(value)
 	if t == 'string' then
 		output[#output + 1] = string.format('%q', value)
@@ -627,7 +624,7 @@ function prelude.pcall_trace(fn, ...)
 			return tostring(err)
 		end
 	end
-	return xpcall(function (...) return fn(...) end, handle_by_capturing_stack_trace)
+	return xpcall(fn, handle_by_capturing_stack_trace, ...)
 end
 
 return prelude

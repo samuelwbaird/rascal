@@ -277,11 +277,10 @@ end, endpoint:match(':(%d+)$'), limited_endpoint:match(':(%d+)$'))
 
 -- the server runs on this thread's loop, so wait by running the loop
 local message = nil
-local started = messaging.utc_time()
-while not message and messaging.utc_time() - started < 10 do
-	loop:sleep_ex(10)
+wait_until(function ()
 	message = results:recv(messaging.zmq.DONTWAIT)
-end
+	return message ~= nil
+end)
 results:close()
 server:close()
 limited:close()

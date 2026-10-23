@@ -72,20 +72,20 @@ assert(function_output:find('thread failed: [^\n]*:2: function thread failure'),
 -- the main thread waits for its threads after the script, then exits
 expect_equal(run_rascal_script([[
 	local threads = require('rascal.threads')
-	threads.start([==[
-		require('rascal.messaging').loop():add_once(100, function () print('thread finished') end)
-	]==])
+	threads.start(function ()
+		loop:add_once(100, function () print('thread finished') end)
+	end)
 	print('script finished')
 ]]), 'script finished\nthread finished')
 
 -- threads wait for the threads they start
 expect_equal(run_rascal_script([[
-	require('rascal.threads').start([==[
-		require('rascal.threads').start([=[
-			require('rascal.messaging').loop():add_once(100, function () print('grandchild finished') end)
-		]=])
+	require('rascal.threads').start(function ()
+		require('rascal.threads').start(function ()
+			loop:add_once(100, function () print('grandchild finished') end)
+		end)
 		print('child finished')
-	]==])
+	end)
 ]]), 'child finished\ngrandchild finished')
 
 -- a failing thread reports its error, and the rest of the process continues
