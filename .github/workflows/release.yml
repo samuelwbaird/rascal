@@ -6,6 +6,10 @@
 # (the executable and its LICENSES.txt), rascal-<version>-dependencies.tar
 # (every dependency download, for building from source without the network)
 # and SHA256SUMS for all of them
+#
+# the Homebrew formula in https://github.com/samuelwbaird/homebrew-tap is then
+# updated to the release, if the HOMEBREW_TAP_TOKEN secret is set to a token
+# that can push to that repository
 
 name: release
 
@@ -62,7 +66,11 @@ jobs:
   release:
     needs: [build, dependencies]
     runs-on: ubuntu-24.04
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: release
@@ -80,3 +88,20 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "rascal ${GITHUB_REF_NAME#v}" \
             --generate-notes
+
+      - name: Update the Homebrew tap
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/samuelwbaird/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          scripts/homebrew-formula.sh "$version" release/SHA256SUMS > tap/Formula/rascal.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/rascal.rb
+          # nothing to do if the formula is already up to date, eg. a re-run
+          if ! git diff --cached --quiet; then
+            git commit -m "rascal $version"
+            git push
+          fi
