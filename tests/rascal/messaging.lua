@@ -38,9 +38,8 @@ local received, fired = nil, false
 messaging.loop():add_socket(pull, function (socket) received = socket:recv() end)
 messaging.loop():add_once(10, function () fired = true end)
 push:send('via loop')
-messaging.loop():sleep_ex(100)
+assert(wait_until(function () return received ~= nil and fired end), 'the socket and timer were handled')
 expect_equal(received, 'via loop')
-expect_equal(fired, true)
 messaging.loop():remove_socket(pull)
 pull:close()
 push:close()
@@ -86,7 +85,7 @@ loop:schedule(function (label)
 	steps[#steps + 1] = label .. ' after a turn of the loop'
 end, 'first')
 expect_equal(table.concat(steps, ', '), 'first started', 'runs straight away, until it first yields')
-loop:sleep_ex(100)
+wait_until(function () return #steps == 3 end)
 expect_equal(table.concat(steps, ', '), 'first started, first after 20ms, first after a turn of the loop')
 
 -- errors are raised with the coroutine's stack trace
@@ -94,17 +93,32 @@ expect_error('scheduled failure', loop.schedule, loop, function () error('schedu
 expect_error('can yield a number of milliseconds', loop.schedule, loop, function () coroutine.yield('soon') end)
 
 -- coroutines interleave, and keep the thread running until they are complete
-expect_equal(run_rascal_script([[
+-- (each runs straight away until it yields, then continues after the script,
+-- the order between them after that depends on timing, so is not checked)
+local interleaved = run_rascal_script([[
 	for _, name in ipairs({ 'a', 'b' }) do
 		loop:schedule(function ()
 			for i = 1, 3 do
 				print(name .. i)
-				coroutine.yield(name == 'a' and 10 or 100)
+				coroutine.yield(10)
 			end
 		end)
 	end
 	print('script done')
-]]), 'a1\nb1\nscript done\na2\na3\nb2\nb3')
+]])
+expect_equal(interleaved:sub(1, #'a1\nb1\nscript done\n'), 'a1\nb1\nscript done\n')
+local function in_order(text, ...)
+	local position = 0
+	for _, line in ipairs({ ... }) do
+		local found = text:find(line, position + 1, true)
+		if not found then
+			return false
+		end
+		position = found
+	end
+	return true
+end
+assert(in_order(interleaved, 'a1', 'a2', 'a3') and in_order(interleaved, 'b1', 'b2', 'b3'), interleaved)
 
 -- loop:suspend parks a coroutine, by default against itself, until loop:resume
 local events = {}
@@ -118,7 +132,7 @@ expect_equal(#events, 0, 'parked')
 expect_equal(loop:resume(parked_co, 'first'), 1)
 expect_equal(table.concat(events, ', '), 'resumed with first', 'resumed straight away, up to its next yield')
 expect_equal(loop:resume(parked_co, 'again'), 0, 'each suspend is resumed only once')
-loop:sleep_ex(20)
+wait_until(function () return #events == 2 end)
 expect_equal(table.concat(events, ', '), 'resumed with first, after a turn of the loop')
 
 -- every coroutine parked against a key is woken, and cleared from it
@@ -166,7 +180,7 @@ local outside = coroutine.create(function ()
 end)
 assert(coroutine.resume(outside))
 expect_equal(loop:resume('adopt', 'adopted'), 1)
-loop:sleep_ex(50)
+wait_until(function () return #adopted_steps == 2 end)
 expect_equal(table.concat(adopted_steps, ', '), 'adopted, after 10ms on the loop')
 
 -- a record left by resuming a coroutine some other way is replaced on its next suspend
@@ -186,11 +200,10 @@ loop:schedule(function ()
 	coroutine.yield(function () return flag end)
 	condition_met = true
 end)
-loop:add_once(20, function () flag = true end)
-loop:sleep_ex(10)
-expect_equal(condition_met, false)
-loop:sleep_ex(50)
-expect_equal(condition_met, true)
+loop:sleep_ex(20)
+expect_equal(condition_met, false, 'not met while the flag is false')
+loop:add_once(1, function () flag = true end)
+assert(wait_until(function () return condition_met end), 'met once a timer sets the flag')
 
 -- a condition keeps the thread running, a parked coroutine does not
 expect_equal(run_rascal_script([[

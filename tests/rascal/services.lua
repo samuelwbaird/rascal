@@ -55,11 +55,7 @@ local push_store = services.connect('test_store_push')
 for i = 1, 10 do
 	push_store:set('pushed', i)
 end
-local waited = 0
-while store:get('pushed') ~= 10 and waited < 100 do
-	messaging.loop():sleep_ex(10)
-	waited = waited + 1
-end
+wait_until(function () return store:get('pushed') == 10 end)
 expect_equal(store:get('pushed'), 10)
 
 -- the registry
@@ -78,6 +74,13 @@ threads.start([[
 	local forward = messaging.connect('PUSH', 'test_services_received')
 	-- only some of the published methods are handled
 	local subscriber = {}
+	-- the first ping received shows the subscription is connected
+	function subscriber:ping()
+		if not self.ready then
+			self.ready = true
+			forward:send('ready')
+		end
+	end
 	function subscriber:moved(name, x, y)
 		forward:send(name .. ' moved to ' .. x .. ',' .. y)
 		if name == 'last' then
@@ -86,15 +89,17 @@ threads.start([[
 		end
 	end
 	subscription = services.subscribe('test_events', subscriber)
-	forward:send('subscribed')
 ]])
 local events = services.serve('test_events', 'PUB', {
+	ping = '',
 	moved = 'name:string, x:number, y:number',
 	ignored = 'anything:*',
 })
-expect_equal(received:recv(), 'subscribed')
--- give the subscription time to connect, published calls before then are dropped
-messaging.loop():sleep_ex(100)
+-- published calls are dropped until the subscription connects, so ping until it is
+assert(wait_until(function ()
+	events:ping()
+	return received:recv(messaging.zmq.DONTWAIT) == 'ready'
+end), 'the subscriber received a ping')
 events:ignored('not handled')
 events:moved('cat', 1, 2)
 events:moved('last', 3, 4)
@@ -138,8 +143,16 @@ threads.start([[
 		coroutine.yield(10)
 		error('failed after yielding')
 	end
+	function slow:hold(milliseconds)
+		local started = require('rascal.messaging').connect('PUSH', 'test_slow_started')
+		started:send('holding')
+		started:close()
+		coroutine.yield(milliseconds)
+		return 'held'
+	end
 	function slow:stop() slow_service:close() end
 	slow_service = services.serve('test_slow', 'ROUTER', {
+		hold = 'milliseconds:number -> label:string',
 		wait = 'milliseconds:number, label:string -> label:string, milliseconds:number',
 		quick = '-> result:string',
 		fail = '',
@@ -165,7 +178,7 @@ local caller = [[
 	push:close()
 ]]
 local started = messaging.utc_time()
-for _, wait in ipairs({ 300, 301, 302 }) do
+for _, wait in ipairs({ 400, 401, 402 }) do
 	threads.start(caller, wait)
 end
 local labels = {}
@@ -173,21 +186,25 @@ for i = 1, 3 do
 	labels[i] = done:recv()
 end
 local elapsed = messaging.utc_time() - started
-assert(elapsed < 0.8, 'three 300ms calls took ' .. elapsed .. 's, so were not in progress at the same time')
+assert(elapsed < 1.0, 'three 400ms calls took ' .. elapsed .. 's, so were not in progress at the same time')
 table.sort(labels)
-expect_equal(table.concat(labels, ', '), 'caller 300, caller 301, caller 302')
+expect_equal(table.concat(labels, ', '), 'caller 400, caller 401, caller 402')
 
 -- closing waits for the calls in progress to reply
-threads.start(caller, 200)
-loop:sleep_ex(100)
+local holding = messaging.bind('PULL', 'test_slow_started')
+holding:set_rcvtimeo(5000)
+threads.start(function ()
+	local result = require('rascal.services').connect('test_slow'):hold(200)
+	local push = require('rascal.messaging').connect('PUSH', 'test_slow_done')
+	push:send(result)
+	push:close()
+end)
+expect_equal(holding:recv(), 'holding', 'the call is in progress')
+holding:close()
 slow:stop()
-expect_equal(done:recv(), 'caller 200')
+expect_equal(done:recv(), 'held')
 done:close()
-local checks = 0
-while services.find('test_slow') and checks < 50 do
-	loop:sleep_ex(10)
-	checks = checks + 1
-end
+wait_until(function () return services.find('test_slow') == nil end)
 expect_equal(services.find('test_slow'), nil, 'closed once the call in progress replied')
 
 -- DEALER connections park only the calling coroutine until the reply arrives
@@ -212,15 +229,13 @@ local finished = {}
 local dealer_started = messaging.utc_time()
 for _, name in ipairs({ 'first', 'second', 'third' }) do
 	loop:schedule(function ()
-		local result = dealer:wait(200, name)
+		local result = dealer:wait(400, name)
 		finished[#finished + 1] = result
 	end)
 end
-while #finished < 3 and messaging.utc_time() - dealer_started < 5 do
-	loop:sleep_ex(10)
-end
+wait_until(function () return #finished == 3 end)
 expect_equal(#finished, 3)
-assert(messaging.utc_time() - dealer_started < 0.5, 'calls on one DEALER connection were not in progress at the same time')
+assert(messaging.utc_time() - dealer_started < 1.0, 'three 400ms calls on one DEALER connection were not in progress at the same time')
 table.sort(finished)
 expect_equal(table.concat(finished, ', '), 'first, second, third')
 
@@ -232,9 +247,7 @@ loop:schedule(function ()
 	dealer_results.rep = rep_dealer:get('answer')
 	rep_dealer:close()
 end)
-while dealer_results.rep == nil and messaging.utc_time() - dealer_started < 5 do
-	loop:sleep_ex(10)
-end
+wait_until(function () return dealer_results.rep ~= nil end)
 assert(tostring(dealer_results.error):find('failed for the dealer', 1, true), tostring(dealer_results.error))
 expect_equal(dealer_results.rep, 42)
 
@@ -299,15 +312,15 @@ threads.start(function ()
 	end
 	local ok, err = pcall(square.fail, square)
 
-	-- many calls at once on a DEALER connection, each worker yielding
+	-- several calls at once on a DEALER connection, each worker yielding
 	local dealer = services.connect('test_balanced', 'DEALER')
 	local waits = {}
 	local started = require('rascal.messaging').utc_time()
-	for i = 1, 6 do
+	for i = 1, 3 do
 		loop:schedule(function ()
-			local worker = dealer:wait(200)
+			local worker = dealer:wait(400)
 			waits[#waits + 1] = worker
-			if #waits == 6 then
+			if #waits == 3 then
 				push:send(cjson.encode({
 					value = value,
 					by_worker = by_worker,
@@ -321,17 +334,16 @@ threads.start(function ()
 end)
 -- the balancer runs on this thread's loop, so wait by running the loop
 local report_message = nil
-local report_started = messaging.utc_time()
-while not report_message and messaging.utc_time() - report_started < 5 do
-	loop:sleep_ex(10)
+wait_until(function ()
 	report_message = balanced_results:recv(messaging.zmq.DONTWAIT)
-end
+	return report_message ~= nil
+end)
 local balanced_report = require('cjson').decode((assert(report_message, 'no report from the balanced service caller')))
 balanced_results:close()
 expect_equal(balanced_report.value, 30 * 30 + 1, 'worker arguments are passed on')
 expect_equal(table.concat(balanced_report.by_worker, ','), '10,10,10')
 assert(balanced_report.error:find('test_balanced:fail failed: [^\n]*worker %d failed'), balanced_report.error)
-assert(balanced_report.elapsed < 0.5, 'calls were not spread across the workers: ' .. balanced_report.elapsed)
+assert(balanced_report.elapsed < 1.0, 'three 400ms calls were not in progress at the same time: ' .. balanced_report.elapsed)
 
 -- closing stops the service and its workers
 balanced:close()

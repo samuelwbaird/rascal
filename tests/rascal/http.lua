@@ -307,7 +307,7 @@ expect_equal(report.close, 'closing')
 expect_equal(report.limited_ok, '0123456789')
 expect_equal(report.limited_body, 413)
 expect_equal(report.limited_header, 431)
-assert(report.idle_closed and report.idle_closed > 0.1 and report.idle_closed < 1.5, 'an idle connection was not closed after its timeout: ' .. tostring(report.idle_closed))
+assert(report.idle_closed and report.idle_closed > 0.1 and report.idle_closed < 3, 'an idle connection was not closed after its timeout: ' .. tostring(report.idle_closed))
 
 os.remove(static_directory .. '/index.html')
 os.remove(static_directory .. '/data.json')

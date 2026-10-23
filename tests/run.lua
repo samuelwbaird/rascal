@@ -23,6 +23,21 @@ function expect_equal(actual, expected, message)
 	end
 end
 
+-- run this thread's loop until condition() returns true, for up to seconds
+-- (default 10), returning whether it did. Tests wait for things to happen
+-- this way rather than for a fixed time, which a busy machine can overrun
+function wait_until(condition, seconds)
+	local messaging = require('rascal.messaging')
+	local finish = messaging.utc_time() + (seconds or 10)
+	while not condition() do
+		if messaging.utc_time() > finish then
+			return false
+		end
+		messaging.loop():sleep_ex(10)
+	end
+	return true
+end
+
 -- run this rascal executable with a command line, returning its output
 -- (stdout and stderr) with log timestamps removed, and whether it succeeded
 local rascal_executable = arg[-1]
