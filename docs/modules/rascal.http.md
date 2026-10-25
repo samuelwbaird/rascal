@@ -126,7 +126,7 @@ A header's value, by a name in any case.
 
 ### request:json(), request:msgpack()
 
-The body decoded as JSON or MessagePack, or nil if there's no body.
+The body decoded as JSON or MessagePack, or nil if there's no body. A JSON null is decoded as `cjson.null`, which arrives as nil when passed to another thread, see [values](rascal.messaging.md#values).
 
 ### request:input()
 

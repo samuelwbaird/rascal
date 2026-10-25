@@ -11,6 +11,33 @@ expect_equal(messaging.context(), messaging.context(), 'one context')
 expect_equal(messaging.loop(), messaging.loop(), 'one loop per thread')
 assert(math.abs(messaging.utc_time() - os.time()) < 2)
 
+-- packing values: only what msgpack can encode, and json null as nil
+local cjson = require('cjson')
+local a, b, c = messaging.unpack(messaging.pack(1, nil, { x = 'y', list = { 1, 2 } }))
+expect_equal(a, 1)
+expect_equal(b, nil)
+expect_equal(c.list[2], 2)
+local decoded = cjson.decode('{"name":"x","selected":null,"list":[1,null,3]}')
+local passed = messaging.unpack(messaging.pack(decoded))
+expect_equal(passed.name, 'x')
+expect_equal(passed.selected, nil, 'json null arrives as nil')
+expect_equal(passed.list[3], 3)
+expect_equal(passed.list[2], nil)
+expect_error('cannot pass a function', messaging.pack, { f = print })
+expect_error('cannot pass a userdata', messaging.pack, { file = io.stdout })
+local cycle = {}
+cycle.self = cycle
+expect_error('contains itself', messaging.pack, cycle)
+
+-- with check_values off, values that can't be encoded arrive as nil
+messaging.check_values = false
+local unchecked = messaging.unpack(messaging.pack({ f = print, file = io.stdout, kept = true }))
+expect_equal(unchecked.f, nil)
+expect_equal(unchecked.file, nil)
+expect_equal(unchecked.kept, true)
+assert(type(messaging.pack(cycle)) == 'string', 'a table that contains itself is packed to msgpack\'s nesting limit')
+messaging.check_values = true
+
 -- inproc by name, socket types by name or constant
 local server = messaging.bind('PAIR', 'test_messaging')
 local client = messaging.connect(messaging.zmq.PAIR, 'test_messaging')

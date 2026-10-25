@@ -51,9 +51,24 @@ An inproc socket can connect before the other end binds; messages wait until it 
 
 Values passed between threads, as thread arguments or service calls, are limited to what MessagePack can encode: nil, booleans, numbers, strings, and tables of those.
 
+A JSON null, `cjson.null`, can be passed too, and arrives as nil. So JSON decoded from a request, eg. with `request:json()`, can be passed straight on to a service.
+
 ### messaging.pack(...)
 
 Packs any number of values into a string. It raises an error for a function, userdata, coroutine or a table that contains itself, rather than letting them become nil silently.
+
+Tables are passed as plain data: a table with a metatable, eg. an object of a class, arrives without it.
+
+### messaging.check_values
+
+True by default. Set it to false to pass values that can't be encoded as nil, rather than raising an error, which also skips checking every value as it's packed:
+
+```lua
+messaging.check_values = false
+```
+
+- **Per thread:** each thread has its own messaging module, so the setting only affects the thread that sets it.
+- **Tables that contain themselves** are packed only to MessagePack's nesting limit.
 
 ### messaging.unpack(packed)
 

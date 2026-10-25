@@ -47,6 +47,10 @@ expect_equal(select('#', store:echo(1, 2, 3)), 3)
 expect_error('services: test_store:fail failed: [^\n]*services%.lua:%d+: deliberate', store.fail, store, 'deliberate')
 expect_error('unable to return the result', store.unsendable, store)
 expect_error('cannot pass a function', store.set, store, 'bad', print)
+-- json null in a call arrives as nil, eg. a request's json passed on to a service
+store:set('json', require('cjson').decode('{"kept":1,"dropped":null}'))
+expect_equal(store:get('json').kept, 1)
+expect_equal(store:get('json').dropped, nil)
 -- the connection is still usable after errors
 expect_equal(store:get('answer'), 42)
 

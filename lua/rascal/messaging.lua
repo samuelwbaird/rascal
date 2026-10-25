@@ -205,7 +205,19 @@ end
 -- values -----------------------------------------------------------------------------------
 
 -- values passed between threads are limited to what cmsgpack can encode:
--- nil, booleans, numbers, strings and tables of those
+-- nil, booleans, numbers, strings and tables of those. A json null
+-- (cjson.null) can be passed too, and arrives as nil, as json decoded from
+-- requests is often passed on to other threads
+
+-- set to false in a thread to pass values that can't be encoded as nil,
+-- rather than raising an error, which also skips checking every value
+messaging.check_values = true
+
+-- json null, when cjson has been loaded
+local function is_json_null(value)
+	local cjson = package.loaded['cjson'] or package.loaded['cjson.safe']
+	return cjson ~= nil and value == cjson.null
+end
 
 local function check_value(value, seen)
 	local value_type = type(value)
@@ -220,15 +232,19 @@ local function check_value(value, seen)
 		end
 		seen[value] = nil
 	elseif value_type ~= 'nil' and value_type ~= 'boolean' and value_type ~= 'number' and value_type ~= 'string' then
-		error('messaging: cannot pass a ' .. value_type, 0)
+		if not (value_type == 'userdata' and is_json_null(value)) then
+			error('messaging: cannot pass a ' .. value_type, 0)
+		end
 	end
 end
 
 -- pack any number of values into a string, raising an error for values
--- that cannot be passed between threads
+-- that cannot be passed between threads (unless check_values is false)
 function messaging.pack(...)
 	local values = table.pack(...)
-	check_value(values, {})
+	if messaging.check_values then
+		check_value(values, {})
+	end
 	return cmsgpack.pack(values)
 end
 
