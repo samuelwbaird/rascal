@@ -8,13 +8,15 @@
 -- local message = socket:receive(1000)     -- a decoded json message, or nil after 1000ms
 -- socket:close()
 --
--- Messages are json text, decoded as they're received. Binary messages and
--- compression aren't supported.
+-- Messages are json text, decoded as they're received. Messages can be
+-- compressed (permessage-deflate, with no context takeover, so each message
+-- is compressed on its own), and binary messages aren't supported.
 
 local cjson = require('cjson')
 local crypto = require('rascal.crypto')
 local messaging = require('rascal.messaging')
 local parser = require('rascal.http.parser')
+local compression = require('rascal.http.compression')
 
 local websocket = {}
 
@@ -74,24 +76,35 @@ local function apply_mask(payload, mask)
 	return table.concat(out)
 end
 
--- the bytes of one frame, masked with a random key if mask is true (as a client must)
-function websocket.frame(opcode, payload, mask)
+-- the bytes of one frame, masked with a random key if mask is true (as a
+-- client must), and marked as compressed if compressed is true
+function websocket.frame(opcode, payload, mask, compressed)
 	payload = payload or ''
 	local length = #payload
 	local mask_bit = mask and 0x80 or 0
+	local first = 0x80 | opcode | (compressed and 0x40 or 0)
 	local header
 	if length < 126 then
-		header = string.pack('>BB', 0x80 | opcode, mask_bit | length)
+		header = string.pack('>BB', first, mask_bit | length)
 	elseif length < 0x10000 then
-		header = string.pack('>BBI2', 0x80 | opcode, mask_bit | 126, length)
+		header = string.pack('>BBI2', first, mask_bit | 126, length)
 	else
-		header = string.pack('>BBI8', 0x80 | opcode, mask_bit | 127, length)
+		header = string.pack('>BBI8', first, mask_bit | 127, length)
 	end
 	if mask then
 		local key = crypto.random_bytes(4)
 		return header .. key .. apply_mask(payload, key)
 	end
 	return header .. payload
+end
+
+-- the bytes of a text message, compressed if deflate was negotiated and the
+-- message is large enough to be worth it
+function websocket.text_frame(text, mask, deflate)
+	if deflate and #text >= compression.min_size then
+		return websocket.frame(websocket.TEXT, compression.deflate_message(text), mask, true)
+	end
+	return websocket.frame(websocket.TEXT, text, mask)
 end
 
 -- the bytes of a close frame
@@ -101,10 +114,11 @@ function websocket.close_frame(code, reason, mask)
 end
 
 -- read one frame from the start of a buffer, returning the frame { fin,
--- opcode, payload } and the rest of the buffer, or nil if the frame isn't
--- complete yet, or false and a close code if the frame isn't allowed.
--- Frames from clients must be masked (masked = true), frames from servers must not
-function websocket.read_frame(buffer, max_size, masked)
+-- opcode, payload, compressed } and the rest of the buffer, or nil if the
+-- frame isn't complete yet, or false and a close code if the frame isn't allowed.
+-- Frames from clients must be masked (masked = true), frames from servers
+-- must not. Frames can be marked compressed only if deflate was negotiated
+function websocket.read_frame(buffer, max_size, masked, deflate)
 	if #buffer < 2 then
 		return nil
 	end
@@ -113,8 +127,9 @@ function websocket.read_frame(buffer, max_size, masked)
 	local opcode = first & 0x0f
 	local is_masked = second & 0x80 ~= 0
 	local length = second & 0x7f
-	if first & 0x70 ~= 0 or is_masked ~= masked then
-		-- extensions aren't negotiated, and masking must match the sender
+	local compressed = first & 0x40 ~= 0
+	if first & 0x30 ~= 0 or (compressed and not deflate) or is_masked ~= masked then
+		-- only compression can be negotiated, and masking must match the sender
 		return false, websocket.PROTOCOL_ERROR
 	end
 	local offset = 3
@@ -131,8 +146,8 @@ function websocket.read_frame(buffer, max_size, masked)
 		length = string.unpack('>I8', buffer, 3)
 		offset = 11
 	end
-	if opcode >= 8 and (length > 125 or not fin) then
-		-- control frames are short and never fragmented
+	if opcode >= 8 and (length > 125 or not fin or compressed) then
+		-- control frames are short, never fragmented, and never compressed
 		return false, websocket.PROTOCOL_ERROR
 	end
 	if length < 0 or length > max_size then
@@ -153,15 +168,17 @@ function websocket.read_frame(buffer, max_size, masked)
 	if mask then
 		payload = apply_mask(payload, mask)
 	end
-	return { fin = fin, opcode = opcode, payload = payload }, buffer:sub(offset + length)
+	return { fin = fin, opcode = opcode, payload = payload, compressed = compressed }, buffer:sub(offset + length)
 end
 
 -- a reader that assembles frames into messages, calling handlers for each
--- complete text message, close, ping and pong, as the bytes arrive
-function websocket.reader(max_size, masked)
+-- complete text message, close, ping and pong, as the bytes arrive.
+-- With deflate, compressed messages are inflated
+function websocket.reader(max_size, masked, deflate)
 	local buffer = ''
 	local fragments = nil
 	local fragments_size = 0
+	local fragments_compressed = false
 	local reader = {}
 
 	-- add bytes, returning a list of events: { 'text', payload }, { 'close', code, reason },
@@ -170,7 +187,7 @@ function websocket.reader(max_size, masked)
 		buffer = buffer .. data
 		local events = {}
 		while true do
-			local frame, rest = websocket.read_frame(buffer, max_size, masked)
+			local frame, rest = websocket.read_frame(buffer, max_size, masked, deflate)
 			if frame == nil then
 				break
 			elseif frame == false then
@@ -189,6 +206,13 @@ function websocket.reader(max_size, masked)
 				elseif opcode == websocket.BINARY then
 					events[#events + 1] = { 'error', websocket.UNSUPPORTED }
 					break
+				elseif opcode == websocket.CONTINUATION and frame.compressed then
+					-- only the first frame of a message is marked compressed
+					events[#events + 1] = { 'error', websocket.PROTOCOL_ERROR }
+					break
+				end
+				if not fragments then
+					fragments_compressed = frame.compressed
 				end
 				fragments = fragments or {}
 				fragments[#fragments + 1] = frame.payload
@@ -200,6 +224,14 @@ function websocket.reader(max_size, masked)
 				if frame.fin then
 					local text = table.concat(fragments)
 					fragments, fragments_size = nil, 0
+					if fragments_compressed then
+						local inflated, err = compression.inflate_message(text, max_size)
+						if not inflated then
+							events[#events + 1] = { 'error', err == 'too large' and websocket.TOO_BIG or websocket.INVALID_DATA }
+							break
+						end
+						text = inflated
+					end
 					if not utf8.len(text) then
 						events[#events + 1] = { 'error', websocket.INVALID_DATA }
 						break
@@ -229,6 +261,25 @@ function websocket.reader(max_size, masked)
 	return reader
 end
 
+-- the permessage-deflate offer in a Sec-WebSocket-Extensions header, if
+-- there's one this side can accept: each message compressed on its own, with
+-- the full window size
+function websocket.accepts_deflate(extensions)
+	for offer in (extensions or ''):gmatch('[^,]+') do
+		local name = offer:match('^%s*([^;%s]+)')
+		if name == 'permessage-deflate' then
+			local bits = offer:match('server_max_window_bits%s*=%s*"?(%d+)')
+			if not bits or tonumber(bits) == 15 then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+-- the extension header accepting deflate, with no context takeover in either direction
+websocket.deflate_extension = 'permessage-deflate; server_no_context_takeover; client_no_context_takeover'
+
 -- a json message decoded from text, or nil if it isn't json
 function websocket.decode(text)
 	local ok, value = pcall(cjson.decode, text)
@@ -244,9 +295,10 @@ client_class.__index = client_class
 
 -- connect to a websocket url, eg. ws://127.0.0.1:8080/live, returning the
 -- client, or raising an error with the status if the server refuses it.
+-- It offers compression unless options.compress is false.
 -- It blocks its thread while connecting and receiving, so never connect to
 -- a server running in this same thread
-function websocket.connect(url, headers, timeout)
+function websocket.connect(url, headers, timeout, options)
 	local host, port, target = url:match('^ws://([^/:]+):?(%d*)(.*)$')
 	if not host then
 		error('websocket: connect needs a ws:// url, not ' .. tostring(url), 2)
@@ -274,6 +326,9 @@ function websocket.connect(url, headers, timeout)
 		'sec-websocket-key: ' .. key,
 		'sec-websocket-version: 13',
 	}
+	if not (options and options.compress == false) then
+		lines[#lines + 1] = 'sec-websocket-extensions: ' .. websocket.deflate_extension
+	end
 	for name, value in pairs(headers or {}) do
 		lines[#lines + 1] = name .. ': ' .. value
 	end
@@ -281,6 +336,7 @@ function websocket.connect(url, headers, timeout)
 
 	-- read the handshake response
 	local buffer = ''
+	local deflate = false
 	while true do
 		frames = socket:recv_all()
 		if not frames or frames[2] == '' then
@@ -298,6 +354,7 @@ function websocket.connect(url, headers, timeout)
 				error('websocket: ' .. url .. ' refused with status ' .. response.status, 2)
 			end
 			buffer = buffer:sub(header_length + 1)
+			deflate = (response.headers['sec-websocket-extensions'] or ''):find('permessage-deflate', 1, true) ~= nil
 			break
 		end
 	end
@@ -305,7 +362,8 @@ function websocket.connect(url, headers, timeout)
 	local client = setmetatable({
 		socket = socket,
 		id = id,
-		reader = websocket.reader(16 * 1024 * 1024, false),
+		deflate = deflate,
+		reader = websocket.reader(16 * 1024 * 1024, false, deflate),
 		messages = {},
 		closed = nil,
 	}, client_class)
@@ -334,7 +392,7 @@ function client_class:send(message)
 	if type(message) ~= 'string' then
 		message = cjson.encode(message)
 	end
-	self.socket:send_all({ self.id, websocket.frame(websocket.TEXT, message, true) })
+	self.socket:send_all({ self.id, websocket.text_frame(message, true, self.deflate) })
 end
 
 -- send a frame as it is, eg. a ping, for tests

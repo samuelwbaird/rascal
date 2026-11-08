@@ -22,7 +22,7 @@ server:listen('tcp://*:8080')
 
 The server listens with a ZeroMQ STREAM socket, on its thread's loop, and parses requests with [picohttpparser](../dependencies.md#picohttpparser). Each request is handled in its own coroutine. So handlers can yield, wait with `loop:suspend` (eg. for long polling), or call services over DEALER connections, without holding up other requests.
 
-It also holds [websockets](#websockets), sending their messages to services, and sending to them by name from any thread.
+It also holds [websockets](#websockets), sending their messages to services, and sending to them by name from any thread. Responses and websocket messages are [compressed](#compression) when the client accepts it.
 
 There's no TLS: serve plain HTTP behind a proxy that terminates TLS. See [Architecture](../technical/architecture.md#http) for the design, and the [http_server](../examples/http_server.md) and [guestbook](../examples/guestbook.md) examples.
 
@@ -214,6 +214,7 @@ A new server. Options change these defaults for this server:
 | `websockets` | none | the name of a service for sending to this server's websockets, which allows websocket upgrades, see [websockets](#websockets) |
 | `websocket_timeout` | 60 | seconds an idle websocket is kept open. Quiet websockets are pinged after half this long |
 | `max_body_size` | 1MB | also the largest websocket message |
+| `compress` | true | `false` to never compress responses or websocket messages, see [compression](#compression) |
 
 The defaults are `http.max_header_size`, `http.max_body_size`, `http.keep_alive_timeout` and `http.websocket_timeout`, and can be changed for every server.
 
@@ -235,7 +236,7 @@ Stops listening, and closes every connection.
 
 - **Keep-alive:** connections stay open between requests, unless the client asks to close them or uses HTTP/1.0 without asking to keep them.
 - **Ordering:** requests on one connection are handled one at a time, in order. Requests on different connections are handled at the same time.
-- **Request bodies:** a request with `expect: 100-continue` is told to continue. Chunked request bodies aren't supported, and are rejected with 411.
+- **Request bodies:** a request with `expect: 100-continue` is told to continue. Chunked request bodies aren't supported, and are rejected with 411. Bodies sent with gzip are decoded, see [compression](#compression).
 - **Slow readers:** sending never blocks the server's thread. A connection that isn't reading what's been sent to it is closed.
 
 ## Websockets
@@ -270,7 +271,7 @@ websockets:send('session:abc', { type = 'update', score = 10 })
 
 The [emoji_board](../examples/emoji_board.md) example is a complete one.
 
-Messages are JSON text, sent and received as tables. Binary messages close the websocket with code 1003, and compression isn't supported.
+Messages are JSON text, sent and received as tables. Binary messages close the websocket with code 1003. Large messages are [compressed](#compression) if the browser offers it, as browsers do.
 
 ### Accepting a websocket
 
@@ -351,10 +352,38 @@ socket:close()
 
 | | |
 | --- | --- |
-| `websocket.connect(url, headers, timeout)` | connects to a `ws://` URL, raising an error with the status if the server refuses |
+| `websocket.connect(url, headers, timeout, options)` | connects to a `ws://` URL, raising an error with the status if the server refuses. It offers compression, unless `options.compress` is `false` |
 | `socket:send(message)` | sends a table as JSON, or a string of JSON |
 | `socket:receive(timeout)` | the next message, decoded, or nil after timeout milliseconds or if the websocket closes. Then `socket.closed` has its `code` and `reason` |
 | `socket:close(code, reason)` | closes the websocket, waiting up to a second for the server to answer |
+
+## Compression
+
+Compression is on by default, and `http.server({ compress = false })` turns it off for a server.
+
+- **Responses** are compressed with gzip when all of these hold:
+  - the request's `accept-encoding` accepts gzip
+  - the body is at least 1KB (`compression.min_size`)
+  - its content type is text, JSON, JavaScript or XML
+  - the handler hasn't set a `content-encoding` of its own
+  
+  These responses also get `vary: accept-encoding`, so caches keep compressed and uncompressed copies apart.
+- **Request bodies** sent with `content-encoding: gzip` are decoded before the handlers see them, whatever the `compress` option. The decoded body is still limited to `max_body_size`, and rejected with 413 if it's larger. An invalid gzip body is rejected with 400, and any other encoding with 415.
+- **Websocket messages** of at least 1KB are compressed with permessage-deflate (RFC 7692), when the browser offers it.
+  - **Each message on its own:** the server accepts it with no context takeover in either direction, so it keeps no compression state for each websocket, at some cost in how well small messages compress.
+  - **Limits:** a message is still limited to `max_body_size` once it's inflated, and closes the websocket with code 1009 if it's larger, or 1007 if it can't be inflated.
+
+Behind a proxy, either can compress: nginx leaves a response that's already compressed as it is.
+
+`rascal.http.compression` has the functions the server uses, built on [lua-zlib](../dependencies.md#lua-zlib):
+
+| | |
+| --- | --- |
+| `compression.gzip(text, level)` | text compressed with gzip, at a level from 1 to 9 (default 6) |
+| `compression.gunzip(data, max_size)` | the text from gzip data, or nil and `'too large'` or `'invalid compressed data'` |
+| `compression.deflate_message(text)`, `compression.inflate_message(data, max_size)` | a websocket message compressed and inflated, for permessage-deflate |
+| `compression.accepts_gzip(accept_encoding)` | whether an `accept-encoding` header accepts gzip |
+| `compression.compressible(content_type)` | whether a content type is worth compressing |
 
 ## The client
 
@@ -371,6 +400,7 @@ It's a minimal client, for tests and local services:
 - **Blocking:** it blocks its thread until the response arrives, so never call a server running in the same thread.
 - **Timeout:** it raises an error after `timeout` milliseconds, 10000 by default.
 - **Plain HTTP only:** it supports `http://` URLs, with no TLS, redirects or chunked responses.
+- **Compression:** it sends `accept-encoding: gzip`, unless the headers give an `accept-encoding`, and decodes a gzip body, up to `http.max_fetch_size` (64MB). The headers are kept as they were received, so `content-encoding` shows the body was compressed.
 
 For websockets, see [a websocket client](#a-websocket-client).
 

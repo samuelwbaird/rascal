@@ -131,6 +131,7 @@ Some choices in how this works:
 - **Workers are a balanced service.** `http.workers` is `services.serve_balanced` with a handler API, so slow handlers move to other threads with one change to the routing.
 - **Sending never blocks.** The STREAM socket's send timeout is zero, so a client that stops reading is disconnected, rather than stalling every other connection in the thread.
 - **Plain HTTP/1.1.** There's no TLS, HTTP/2 or chunked request bodies. A server is expected to sit behind a proxy that terminates TLS.
+- **Compression without state.** Responses are gzipped when they're large enough to be worth it. Websocket messages are compressed each on its own (no context takeover), so the server keeps no zlib stream for each websocket, and memory stays the same however many are open. Inflating always has a size limit, fed a little at a time, so a small compressed body can't expand into a large one.
 - **Websockets are held by the server, by name.**
   - **Authorising:** a websocket upgrade goes through the handlers like any request, so the code that knows the session or user decides whether to accept it, and names it.
   - **Holding:** the server holds each websocket as a connection with a name, not a coroutine or ZeroMQ socket of its own.
@@ -139,7 +140,6 @@ Some choices in how this works:
   - **Why push rather than pull:** pushing keeps each websocket's messages in order, which a queue that several consumers pull from wouldn't.
 
 Some features are deliberately left for later, or for programs to add themselves:
-- **Compression** is better done by the proxy in front.
 - **Lua as a response format,** eg. `application/lua`, would mean running code received from a client. MessagePack and JSON are used instead.
 
 ## Library modules and examples

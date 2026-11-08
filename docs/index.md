@@ -58,5 +58,6 @@ Each is downloaded at a pinned version, checked against its sha256 and compiled 
 | lua-cjson | `cjson` | [lua-cjson manual](https://www.kyne.com.au/~mark/software/lua-cjson-manual.html), with [OpenResty's additions](https://github.com/openresty/lua-cjson#readme) |
 | lua-cmsgpack | `cmsgpack` | [lua-cmsgpack](https://github.com/antirez/lua-cmsgpack#readme) |
 | LuaFileSystem | `lfs` | [LuaFileSystem manual](https://lunarmodules.github.io/luafilesystem/manual.html) |
+| zlib, lua-zlib | `zlib` | [zlib manual](https://zlib.net/manual.html) and [lua-zlib](https://github.com/brimworks/lua-zlib#readme) |
 | picohttpparser | `rascal.http.parser` | [picohttpparser](https://github.com/h2o/picohttpparser#readme) |
 | Mbed TLS | `rascal.crypto.core` | [Mbed TLS documentation](https://mbed-tls.readthedocs.io/) |

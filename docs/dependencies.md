@@ -100,6 +100,27 @@ To add another, see [Adding dependencies](technical/adding-dependencies.md).
 | Documentation | [LuaFileSystem manual](https://lunarmodules.github.io/luafilesystem/manual.html) |
 | Declared in | [`deps/lfs.mk`](../deps/lfs.mk) |
 
+## zlib
+
+| | |
+| --- | --- |
+| Version | 1.3.2 |
+| Used for | gzip and deflate compression, through lua-zlib |
+| Home | https://zlib.net |
+| Documentation | [zlib manual](https://zlib.net/manual.html) |
+| Declared in | [`deps/zlib.mk`](../deps/zlib.mk), downloaded from its GitHub tag archive |
+
+## lua-zlib
+
+| | |
+| --- | --- |
+| Version | 1.4 |
+| require | `zlib` |
+| Used for | zlib from Lua. [rascal.http](modules/rascal.http.md#compression) compresses responses and websocket messages with it |
+| Home | https://github.com/brimworks/lua-zlib |
+| Documentation | [lua-zlib README](https://github.com/brimworks/lua-zlib#readme) |
+| Declared in | [`deps/luazlib.mk`](../deps/luazlib.mk) |
+
 ## picohttpparser
 
 | | |

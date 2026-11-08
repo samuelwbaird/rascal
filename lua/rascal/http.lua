@@ -59,8 +59,16 @@
 --   closed(name, context, code). Messages are json, as tables. See
 --   rascal.http.websocket for the protocol, and a minimal client.
 --
+-- :: compression
+--   Responses are compressed with gzip when the client accepts it, and the
+--   body is text (or json, javascript, xml) of at least 1KB. Websocket
+--   messages of at least 1KB are compressed when the client offers
+--   permessage-deflate. http.server({ compress = false }) turns both off.
+--   Request bodies sent with gzip are always decoded, and still limited to
+--   max_body_size. See rascal.http.compression.
+--
 -- http.fetch(method, url, body, headers) is a minimal plain HTTP client, for
--- tests and local services. It blocks its thread.
+-- tests and local services. It accepts gzip, and decodes it. It blocks its thread.
 
 local prelude = require('prelude')
 local cjson = require('cjson')
@@ -70,6 +78,7 @@ local messaging = require('rascal.messaging')
 local services = require('rascal.services')
 local threads = require('rascal.threads')
 local websocket = require('rascal.http.websocket')
+local compression = require('rascal.http.compression')
 
 local log = rawget(_G, 'log') or print
 
@@ -79,6 +88,9 @@ local http = {}
 http.max_header_size = 64 * 1024	-- bytes
 http.max_body_size = 1024 * 1024	-- bytes
 http.keep_alive_timeout = 60		-- seconds an idle connection is kept open, or false to keep them
+
+-- the largest response body http.fetch decodes from gzip
+http.max_fetch_size = 64 * 1024 * 1024	-- bytes
 
 http.status_text = {
 	[100] = 'Continue', [101] = 'Switching Protocols',
@@ -342,6 +354,24 @@ end
 
 local no_body_status = { [204] = true, [304] = true }
 
+-- compress a response with gzip, if it's worth it and the request accepts it
+local function compress_response(response, request)
+	local status, body = response.status, response.body
+	if not body or #body < compression.min_size or status < 200 or no_body_status[status]
+		or response.headers['content-encoding'] or not compression.compressible(response.headers['content-type']) then
+		return
+	end
+	-- caches must keep compressed and uncompressed copies apart
+	response:add_header('vary', 'accept-encoding')
+	if compression.accepts_gzip(request.headers['accept-encoding']) then
+		local compressed = compression.gzip(body)
+		if #compressed < #body then
+			response.body = compressed
+			response.headers['content-encoding'] = 'gzip'
+		end
+	end
+end
+
 -- the bytes of a response, sent to the client
 local function response_bytes(response, request, keep_alive)
 	local body = response.body or ''
@@ -568,6 +598,7 @@ local server_options = {
 	keep_alive_timeout = true,
 	websockets = true,
 	websocket_timeout = true,
+	compress = true,
 }
 
 -- seconds an idle websocket is kept open (it's sent pings after half this long)
@@ -583,6 +614,7 @@ local websockets_api = {
 -- (max_header_size, max_body_size, keep_alive_timeout, websocket_timeout), and
 --   websockets    the name of a PULL service to serve for sending to this server's
 --                 websockets, which allows websocket upgrades (see http.websocket)
+--   compress      false to never compress responses or websocket messages
 function http.server(options)
 	options = options or {}
 	if type(options) ~= 'table' then
@@ -608,6 +640,7 @@ function server_class:init(options)
 	end
 	self.websockets_name = options.websockets
 	self.websocket_timeout = options.websocket_timeout or http.websocket_timeout
+	self.compress = options.compress ~= false
 	self.websockets = {}			-- name -> connection
 	self.websocket_events = {}		-- service name -> connection to it
 end
@@ -813,8 +846,26 @@ function server_class:next_request(connection)
 
 	connection.buffer = buffer:sub(header_length + length + 1)
 	connection.continued = false
+	local body = buffer:sub(header_length + 1, header_length + length)
+
+	-- decode a compressed body, still limited to the maximum size
+	local content_encoding = (headers['content-encoding'] or 'identity'):lower()
+	if content_encoding == 'gzip' or content_encoding == 'x-gzip' then
+		local decoded, err = compression.gunzip(body, self.max_body_size)
+		if not decoded then
+			self:reject(connection, err == 'too large' and 413 or 400)
+			return
+		end
+		body = decoded
+		headers['content-encoding'] = nil
+		headers['content-length'] = tostring(#body)
+	elseif content_encoding ~= 'identity' then
+		self:reject(connection, 415)
+		return
+	end
+
 	connection.busy = true
-	local request = build_request(parsed, buffer:sub(header_length + 1, header_length + length))
+	local request = build_request(parsed, body)
 	messaging.loop():schedule(function ()
 		self:respond(connection, request)
 	end)
@@ -845,6 +896,9 @@ function server_class:respond(connection, request)
 	if response.websocket then
 		self:upgrade(connection, request, response)
 		return
+	end
+	if self.compress then
+		compress_response(response, request)
 	end
 	local keep_alive = request.keep_alive and (response.headers.connection or ''):lower() ~= 'close'
 	self:send(connection, response_bytes(response, request, keep_alive))
@@ -914,13 +968,18 @@ function server_class:upgrade(connection, request, response)
 		return
 	end
 
-	-- the handshake
-	self:send(connection, table.concat({
+	-- the handshake, accepting compression if it's offered
+	local deflate = self.compress and websocket.accepts_deflate(request.headers['sec-websocket-extensions'])
+	local lines = {
 		'HTTP/1.1 101 Switching Protocols',
 		'upgrade: websocket',
 		'connection: Upgrade',
 		'sec-websocket-accept: ' .. websocket.accept_key(request.headers['sec-websocket-key']),
-	}, '\r\n') .. '\r\n\r\n')
+	}
+	if deflate then
+		lines[#lines + 1] = 'sec-websocket-extensions: ' .. websocket.deflate_extension
+	end
+	self:send(connection, table.concat(lines, '\r\n') .. '\r\n\r\n')
 	if connection.closed or connection.closing then
 		return
 	end
@@ -936,7 +995,8 @@ function server_class:upgrade(connection, request, response)
 		name = options.name,
 		context = options.context,
 		events = events,
-		reader = websocket.reader(self.max_body_size, true),
+		reader = websocket.reader(self.max_body_size, true, deflate),
+		deflate = deflate,
 		pinged = false,
 	}
 	self.websockets[options.name] = connection
@@ -987,7 +1047,7 @@ function server_class:websocket_send(name, message)
 		if type(message) ~= 'string' then
 			message = cjson.encode(message)
 		end
-		self:send(connection, websocket.frame(websocket.TEXT, message))
+		self:send(connection, websocket.text_frame(message, false, connection.websocket.deflate))
 	end
 end
 
@@ -1030,7 +1090,9 @@ end
 -- a minimal client -----------------------------------------------------------------------------
 
 -- make a plain HTTP request and return the response, with status, headers
--- (lower case names), body and response:json(). Blocks this thread until the
+-- (lower case names), body and response:json(). It accepts gzip unless the
+-- headers give an accept-encoding, and a gzip body is decoded (its headers are
+-- kept as they were received). Blocks this thread until the
 -- response arrives (so never call a server running in this same thread),
 -- raising an error after timeout milliseconds (default 10000)
 function http.fetch(method, url, body, headers, timeout)
@@ -1063,8 +1125,13 @@ function http.fetch(method, url, body, headers, timeout)
 		'connection: close',
 		'content-length: ' .. #body,
 	}
+	local accept_encoding = false
 	for name, value in pairs(headers or {}) do
 		lines[#lines + 1] = name .. ': ' .. value
+		accept_encoding = accept_encoding or name:lower() == 'accept-encoding'
+	end
+	if not accept_encoding then
+		lines[#lines + 1] = 'accept-encoding: gzip'
 	end
 	socket:send_all({ id, table.concat(lines, '\r\n') .. '\r\n\r\n' .. body })
 
@@ -1103,6 +1170,13 @@ function http.fetch(method, url, body, headers, timeout)
 	local result = response_class(response.status)
 	result.headers = response.headers
 	result.body = buffer:sub(header_length + 1)
+	if (response.headers['content-encoding'] or ''):lower() == 'gzip' then
+		local decoded, err = compression.gunzip(result.body, http.max_fetch_size)
+		if not decoded then
+			error('http: ' .. method .. ' ' .. url .. ' received a gzip body that ' .. (err == 'too large' and 'is too large' or 'is not valid'), 2)
+		end
+		result.body = decoded
+	end
 	return result
 end
 
