@@ -41,6 +41,7 @@ Each example is a complete program in [`examples/`](../examples), and runs direc
 | [load_balancer](examples/load_balancer.md) | a ROUTER in front of DEALER connections to backends of different speeds |
 | [http_server](examples/http_server.md) | routes in the server thread and in worker threads, static files, for load testing |
 | [guestbook](examples/guestbook.md) | a small web app: entries in their own thread, live updates by long polling |
+| [emoji_board](examples/emoji_board.md) | a live board of emoji reactions, shared by everyone over websockets |
 
 ## Third party dependencies
 

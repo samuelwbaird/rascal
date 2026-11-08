@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>rascal emoji board</title>
+	<style>
+		html, body { height: 100%; margin: 0; overflow: hidden; }
+		body { font-family: system-ui, sans-serif; background: #fafafa; }
+		header { position: fixed; bottom: 0; left: 0; right: 0; padding: 1rem; text-align: center; background: #fff; border-top: 1px solid #ddd; z-index: 1; }
+		header p { margin: 0 0 0.5rem; color: #555; }
+		button { font-size: 2rem; border: none; background: none; cursor: pointer; padding: 0.2rem 0.4rem; border-radius: 0.5rem; }
+		button:hover { background: #eee; }
+		.status { position: fixed; top: 0.5rem; right: 0.75rem; color: #999; font-size: 0.85rem; }
+		.reaction { position: absolute; font-size: 3rem; animation: float 4s ease-out forwards; pointer-events: none; }
+		@keyframes float {
+			from { transform: translateY(0); opacity: 1; }
+			to { transform: translateY(-70vh); opacity: 0; }
+		}
+	</style>
+</head>
+<body>
+	<div class="status" id="status">connecting...</div>
+	<header>
+		<p>Send a reaction: everyone on this page sees it straight away, over a websocket.</p>
+		<div id="buttons"></div>
+	</header>
+	<script>
+		const status = document.getElementById('status');
+		let socket = null;
+
+		// show a reaction floating up from a random place along the bottom
+		function show(emoji) {
+			const reaction = document.createElement('div');
+			reaction.className = 'reaction';
+			reaction.textContent = emoji;
+			reaction.style.left = (5 + Math.random() * 85) + 'vw';
+			reaction.style.top = (60 + Math.random() * 20) + 'vh';
+			document.body.append(reaction);
+			reaction.addEventListener('animationend', () => reaction.remove());
+		}
+
+		// connect, and reconnect a moment after the websocket closes
+		function connect() {
+			const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+			socket = new WebSocket(protocol + '//' + location.host + '/live');
+			socket.onopen = () => { status.textContent = 'connected'; };
+			socket.onmessage = (event) => show(JSON.parse(event.data).emoji);
+			socket.onclose = () => {
+				status.textContent = 'reconnecting...';
+				setTimeout(connect, 1000);
+			};
+		}
+
+		// a button for each emoji on the board
+		fetch('emoji').then((response) => response.json()).then((emoji) => {
+			const buttons = document.getElementById('buttons');
+			for (const e of emoji) {
+				const button = document.createElement('button');
+				button.textContent = e;
+				button.onclick = () => {
+					if (socket && socket.readyState === WebSocket.OPEN) {
+						socket.send(JSON.stringify({ emoji: e }));
+					}
+				};
+				buttons.append(button);
+			}
+		});
+
+		connect();
+	</script>
+</body>
+</html>

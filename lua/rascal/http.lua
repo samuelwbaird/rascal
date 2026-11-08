@@ -50,6 +50,15 @@
 -- (eg. for long polling) or call other services with DEALER connections.
 -- Requests on one connection are handled one at a time, in order.
 --
+-- :: websockets
+--   http.server({ websockets = 'name' }) allows websocket upgrades, and serves
+--   a PULL service of that name to send to them: send(name, message),
+--   disconnect(name, code, reason). A handler accepts an upgrade by returning
+--   http.websocket({ name, service, context }), and the named PULL service
+--   receives opened(name, context), message(name, context, message) and
+--   closed(name, context, code). Messages are json, as tables. See
+--   rascal.http.websocket for the protocol, and a minimal client.
+--
 -- http.fetch(method, url, body, headers) is a minimal plain HTTP client, for
 -- tests and local services. It blocks its thread.
 
@@ -60,6 +69,7 @@ local parser = require('rascal.http.parser')
 local messaging = require('rascal.messaging')
 local services = require('rascal.services')
 local threads = require('rascal.threads')
+local websocket = require('rascal.http.websocket')
 
 local log = rawget(_G, 'log') or print
 
@@ -287,9 +297,31 @@ function http.response(value)
 			response.headers[name:lower()] = header
 		end
 		response.body = value.body
+		response.websocket = value.websocket
 		return response
 	end
 	error('http: a response is a status number, a string or a response table, not ' .. tostring(value), 2)
+end
+
+-- the response accepting a websocket upgrade, see the server's websockets option
+--   name       names the websocket, to send to it. A newer websocket with the same name replaces it
+--   service    a PULL service receiving the websocket's events, with methods
+--              opened(name, context), message(name, context, message) and closed(name, context, code)
+--   context    plain values passed with each event, eg. the user or session (default {})
+function http.websocket(options)
+	if type(options) ~= 'table' or type(options.name) ~= 'string' or options.name == '' then
+		error('http: http.websocket needs a name for the websocket, eg. a session or user id', 2)
+	end
+	if type(options.service) ~= 'string' or options.service == '' then
+		error('http: http.websocket needs the name of the service to receive its events', 2)
+	end
+	local response = response_class(101)
+	response.websocket = {
+		name = options.name,
+		service = options.service,
+		context = options.context or {},
+	}
+	return response
 end
 
 function http.json(value, status)
@@ -534,10 +566,23 @@ local server_options = {
 	max_header_size = true,
 	max_body_size = true,
 	keep_alive_timeout = true,
+	websockets = true,
+	websocket_timeout = true,
+}
+
+-- seconds an idle websocket is kept open (it's sent pings after half this long)
+http.websocket_timeout = 60
+
+-- api of the service a server with websockets serves, to send to them by name
+local websockets_api = {
+	send = 'name:string, message:* -> void',
+	disconnect = 'name:string, code:number, reason:string -> void',
 }
 
 -- a server, with options to change the defaults above for this server
--- (max_header_size, max_body_size, keep_alive_timeout)
+-- (max_header_size, max_body_size, keep_alive_timeout, websocket_timeout), and
+--   websockets    the name of a PULL service to serve for sending to this server's
+--                 websockets, which allows websocket upgrades (see http.websocket)
 function http.server(options)
 	options = options or {}
 	if type(options) ~= 'table' then
@@ -561,6 +606,10 @@ function server_class:init(options)
 	else
 		self.keep_alive_timeout = http.keep_alive_timeout
 	end
+	self.websockets_name = options.websockets
+	self.websocket_timeout = options.websocket_timeout or http.websocket_timeout
+	self.websockets = {}			-- name -> connection
+	self.websocket_events = {}		-- service name -> connection to it
 end
 
 function server_class:handle(handler)
@@ -603,6 +652,24 @@ function server_class:listen(endpoint)
 			self:close_idle()
 		end)
 	end
+	-- serve sending to websockets by name, and check them for timeouts
+	if self.websockets_name then
+		self.websockets_service = services.serve(self.websockets_name, 'PULL', websockets_api, {
+			send = function (_, name, message)
+				self:websocket_send(name, message)
+			end,
+			disconnect = function (_, name, code, reason)
+				local connection = self.websockets[name]
+				if connection then
+					self:close_websocket(connection, code or websocket.NORMAL, reason)
+				end
+			end,
+		})
+		local interval = math.max(10, math.min(1000, self.websocket_timeout * 250))
+		self.websocket_timer = messaging.loop():add_interval(interval, function ()
+			self:check_websockets()
+		end)
+	end
 	-- lzmq includes the terminating zero byte of the endpoint
 	self.endpoint = socket:get_last_endpoint():gsub('%z$', '')
 	return self.endpoint
@@ -613,7 +680,7 @@ end
 function server_class:close_idle()
 	local now = messaging.utc_time()
 	for _, connection in pairs(self.connections) do
-		if not connection.busy and now - connection.active > self.keep_alive_timeout then
+		if not connection.busy and not connection.websocket and now - connection.active > self.keep_alive_timeout then
 			self:close_connection(connection)
 		end
 	end
@@ -631,7 +698,16 @@ function server_class:close()
 		self.idle_timer:reset()
 		self.idle_timer = nil
 	end
+	if self.websockets_service then
+		self.websockets_service:close()
+		self.websockets_service = nil
+		self.websocket_timer:reset()
+		self.websocket_timer = nil
+	end
 	for _, connection in pairs(self.connections) do
+		if connection.websocket then
+			self:end_websocket(connection, websocket.GOING_AWAY)
+		end
 		connection.closed = true
 	end
 	self.connections = {}
@@ -642,6 +718,9 @@ function server_class:receive(id, data)
 	local connection = self.connections[id]
 	if data == '' then
 		if connection then
+			if connection.websocket then
+				self:end_websocket(connection, websocket.ABNORMAL)
+			end
 			connection.closed = true
 			self.connections[id] = nil
 		else
@@ -653,6 +732,10 @@ function server_class:receive(id, data)
 		return
 	end
 	connection.active = messaging.utc_time()
+	if connection.websocket then
+		self:websocket_receive(connection, data)
+		return
+	end
 	connection.buffer = connection.buffer .. data
 	if not connection.busy then
 		self:next_request(connection)
@@ -669,6 +752,9 @@ function server_class:send(connection, bytes)
 end
 
 function server_class:close_connection(connection)
+	if connection.websocket then
+		self:end_websocket(connection, websocket.ABNORMAL)
+	end
 	if self.socket and not connection.closed and not connection.closing then
 		connection.closing = true
 		self.socket:send_all({ connection.id, '' })
@@ -756,6 +842,10 @@ function server_class:respond(connection, request)
 	if connection.closed or connection.closing then
 		return
 	end
+	if response.websocket then
+		self:upgrade(connection, request, response)
+		return
+	end
 	local keep_alive = request.keep_alive and (response.headers.connection or ''):lower() ~= 'close'
 	self:send(connection, response_bytes(response, request, keep_alive))
 	connection.active = messaging.utc_time()
@@ -764,6 +854,176 @@ function server_class:respond(connection, request)
 		self:next_request(connection)
 	else
 		self:close_connection(connection)
+	end
+end
+
+-- websockets --------------------------------------------------------------------------------
+
+-- a connection to the service receiving a websocket's events, or nil and why not
+function server_class:websocket_events_service(name)
+	local events = self.websocket_events[name]
+	if events then
+		return events
+	end
+	local details = services.find(name)
+	if not details then
+		return nil, 'the service ' .. name .. ' is not served'
+	elseif details.socket_type ~= 'PUSH' then
+		return nil, 'the service ' .. name .. ' must be a PULL service'
+	end
+	events = services.connect(name)
+	if not (events.opened and events.message and events.closed) then
+		return nil, 'the service ' .. name .. ' must have opened, message and closed methods'
+	end
+	self.websocket_events[name] = events
+	return events
+end
+
+-- send an event to a websocket's service, logging rather than raising errors
+local function send_event(connection, method, ...)
+	local socket = connection.websocket
+	local ok, err = pcall(socket.events[method], socket.events, socket.name, socket.context, ...)
+	if not ok then
+		log('http: websocket ' .. socket.name .. ' ' .. method .. ' failed: ' .. tostring(err))
+	end
+end
+
+-- complete a websocket upgrade accepted by a handler, or refuse it
+function server_class:upgrade(connection, request, response)
+	local options = response.websocket
+	local valid, status = websocket.check_upgrade(request)
+	if not valid then
+		-- a handler accepted a request that isn't a valid websocket upgrade
+		if status == 426 then
+			self:send(connection, response_bytes(http.response(426):set_header('sec-websocket-version', '13'), request, false))
+		else
+			log('http: ' .. request.method .. ' ' .. request.full_path .. ' is not a websocket upgrade')
+			self:send(connection, response_bytes(http.response(status), request, false))
+		end
+		self:close_connection(connection)
+		return
+	end
+	local events, err = nil, 'the server has no websockets option'
+	if self.websockets_name then
+		events, err = self:websocket_events_service(options.service)
+	end
+	if not events then
+		log('http: websocket ' .. options.name .. ' refused, ' .. err)
+		self:send(connection, response_bytes(http.response(503), request, false))
+		self:close_connection(connection)
+		return
+	end
+
+	-- the handshake
+	self:send(connection, table.concat({
+		'HTTP/1.1 101 Switching Protocols',
+		'upgrade: websocket',
+		'connection: Upgrade',
+		'sec-websocket-accept: ' .. websocket.accept_key(request.headers['sec-websocket-key']),
+	}, '\r\n') .. '\r\n\r\n')
+	if connection.closed or connection.closing then
+		return
+	end
+
+	-- a newer websocket with the same name replaces the older one
+	local existing = self.websockets[options.name]
+	if existing then
+		self:close_websocket(existing, websocket.REPLACED, 'replaced')
+	end
+
+	connection.busy = false
+	connection.websocket = {
+		name = options.name,
+		context = options.context,
+		events = events,
+		reader = websocket.reader(self.max_body_size, true),
+		pinged = false,
+	}
+	self.websockets[options.name] = connection
+	send_event(connection, 'opened')
+
+	-- any bytes that arrived after the request are websocket frames
+	local buffer = connection.buffer
+	connection.buffer = ''
+	if buffer ~= '' then
+		self:websocket_receive(connection, buffer)
+	end
+end
+
+-- bytes from a websocket, read as frames and sent on as events
+function server_class:websocket_receive(connection, data)
+	local socket = connection.websocket
+	if socket.ended then
+		return
+	end
+	socket.pinged = false
+	for _, event in ipairs(socket.reader.add(data)) do
+		local kind = event[1]
+		if kind == 'text' then
+			local message = websocket.decode(event[2])
+			if message == nil then
+				self:close_websocket(connection, websocket.INVALID_DATA, 'messages must be json')
+				return
+			end
+			send_event(connection, 'message', message)
+		elseif kind == 'ping' then
+			self:send(connection, websocket.frame(websocket.PONG, event[2]))
+		elseif kind == 'close' then
+			-- reply to the close, then close the connection
+			self:close_websocket(connection, event[2] == websocket.NO_STATUS and websocket.NORMAL or event[2])
+			return
+		elseif kind == 'error' then
+			self:close_websocket(connection, event[2])
+			return
+		end
+	end
+end
+
+-- send a message to a websocket by name, a table as json or a string of json,
+-- ignored if there's no websocket with that name
+function server_class:websocket_send(name, message)
+	local connection = self.websockets[name]
+	if connection then
+		if type(message) ~= 'string' then
+			message = cjson.encode(message)
+		end
+		self:send(connection, websocket.frame(websocket.TEXT, message))
+	end
+end
+
+-- the websocket has ended, send its closed event (once)
+function server_class:end_websocket(connection, code)
+	local socket = connection.websocket
+	if socket.ended then
+		return
+	end
+	socket.ended = true
+	if self.websockets[socket.name] == connection then
+		self.websockets[socket.name] = nil
+	end
+	send_event(connection, 'closed', code)
+end
+
+-- close a websocket with a code, sending it a close frame
+function server_class:close_websocket(connection, code, reason)
+	if not connection.websocket.ended then
+		self:send(connection, websocket.close_frame(code, reason))
+	end
+	self:end_websocket(connection, code)
+	self:close_connection(connection)
+end
+
+-- ping websockets that have been quiet, and close those that have been idle too long
+function server_class:check_websockets()
+	local now = messaging.utc_time()
+	for _, connection in pairs(self.websockets) do
+		local idle = now - connection.active
+		if idle > self.websocket_timeout then
+			self:close_websocket(connection, websocket.GOING_AWAY, 'timed out')
+		elseif idle > self.websocket_timeout / 2 and not connection.websocket.pinged then
+			connection.websocket.pinged = true
+			self:send(connection, websocket.frame(websocket.PING, ''))
+		end
 	end
 end
 

@@ -79,7 +79,7 @@ To build from a clone instead, use `make && make install`. That needs `xcode-sel
 | `rascal.messaging` | the shared ZeroMQ context, a loop per thread, inproc sockets by name | |
 | `rascal.threads` | start threads from functions or Lua source, with arguments | |
 | `rascal.services` | serve objects as named services (REQ/REP, ROUTER, DEALER, PUSH/PULL, PUB/SUB), including balanced across worker threads | |
-| `rascal.http` | an HTTP server, with handlers in the server thread or in worker threads, and a minimal client | |
+| `rascal.http` | an HTTP server, with handlers in the server thread or in worker threads, websockets, and a minimal client | |
 | `rascal.http.parser` | [picohttpparser](https://github.com/h2o/picohttpparser), parsing HTTP requests and responses | 1.4+ |
 | `rascal.crypto` | hashing, HMAC, hex and base64, and secure random values, with digests from [Mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | 3.6.7 |
 | `rascal.build` | build information, see [rascal.build](docs/modules/rascal.build.md) | |
@@ -155,10 +155,12 @@ The `examples/` folder has complete programs showing patterns of threads, servic
 | [`load_balancer.lua`](docs/examples/load_balancer.md) | a ROUTER in front of DEALER connections to backends of different speeds |
 | [`http_server.lua`](docs/examples/http_server.md) | routes in the server thread and in worker threads, static files, slow routes, for load testing |
 | [`guestbook.lua`](docs/examples/guestbook.md) | a small web app: entries in their own thread, live updates by long polling |
+| [`emoji_board.lua`](docs/examples/emoji_board.md) | a live board of emoji reactions, shared by everyone over websockets |
 
 ```
 rascal examples/http_server.lua 8080 4      # port, worker threads
 rascal examples/guestbook.lua 8081          # then open http://127.0.0.1:8081/
+rascal examples/emoji_board.lua 8082        # then open http://127.0.0.1:8082/ in two windows
 ```
 
 The test suite runs each example too, with `--test`: the servers then check themselves and exit, rather than serving until stopped. See [Performance](docs/technical/performance.md) for load testing `http_server.lua`.

@@ -22,6 +22,8 @@ server:listen('tcp://*:8080')
 
 The server listens with a ZeroMQ STREAM socket, on its thread's loop, and parses requests with [picohttpparser](../dependencies.md#picohttpparser). Each request is handled in its own coroutine. So handlers can yield, wait with `loop:suspend` (eg. for long polling), or call services over DEALER connections, without holding up other requests.
 
+It also holds [websockets](#websockets), sending their messages to services, and sending to them by name from any thread.
+
 There's no TLS: serve plain HTTP behind a proxy that terminates TLS. See [Architecture](../technical/architecture.md#http) for the design, and the [http_server](../examples/http_server.md) and [guestbook](../examples/guestbook.md) examples.
 
 ## Handlers
@@ -209,8 +211,11 @@ A new server. Options change these defaults for this server:
 | `max_header_size` | 64KB | larger request headers are rejected with 431 |
 | `max_body_size` | 1MB | larger request bodies are rejected with 413 |
 | `keep_alive_timeout` | 60 | seconds an idle connection is kept open, or `false` to keep idle connections open |
+| `websockets` | none | the name of a service for sending to this server's websockets, which allows websocket upgrades, see [websockets](#websockets) |
+| `websocket_timeout` | 60 | seconds an idle websocket is kept open. Quiet websockets are pinged after half this long |
+| `max_body_size` | 1MB | also the largest websocket message |
 
-The defaults are `http.max_header_size`, `http.max_body_size` and `http.keep_alive_timeout`, and can be changed for every server.
+The defaults are `http.max_header_size`, `http.max_body_size`, `http.keep_alive_timeout` and `http.websocket_timeout`, and can be changed for every server.
 
 ### server:handle(handler)
 
@@ -233,6 +238,124 @@ Stops listening, and closes every connection.
 - **Request bodies:** a request with `expect: 100-continue` is told to continue. Chunked request bodies aren't supported, and are rejected with 411.
 - **Slow readers:** sending never blocks the server's thread. A connection that isn't reading what's been sent to it is closed.
 
+## Websockets
+
+A websocket stays open between a browser and the server, so either can send a message at any time. The server holds every websocket, in its own thread, with no coroutine or ZeroMQ socket for each one. Each websocket has a name, and its messages go to a service:
+
+- **Receiving:** each message from a browser is decoded from JSON, and sent with the websocket's name to the service named when it was accepted.
+- **Sending:** any thread sends to a websocket by name, through a service the server serves.
+
+```lua
+-- in the server's thread
+local server = http.server({ websockets = 'game.send' })
+server:equal('/live', function (request, context)
+	local session = sessions:find(request.cookies.session)
+	if not session then
+		return 403
+	end
+	return http.websocket({ name = 'session:' .. session.id, service = 'game.live', context = { user = session.user_id } })
+end)
+
+-- in any thread, a PULL service receiving the websockets' events
+services.serve('game.live', 'PULL', {
+	opened = 'name:string, context:*',
+	message = 'name:string, context:*, message:*',
+	closed = 'name:string, context:*, code:number',
+}, game)
+
+-- and sending to a websocket by name
+local websockets = services.connect('game.send')
+websockets:send('session:abc', { type = 'update', score = 10 })
+```
+
+The [emoji_board](../examples/emoji_board.md) example is a complete one.
+
+Messages are JSON text, sent and received as tables. Binary messages close the websocket with code 1003, and compression isn't supported.
+
+### Accepting a websocket
+
+A websocket starts as an ordinary GET request, asking to be upgraded. It goes through the server's handlers like any other request, so matchers, middleware, cookies and the context all apply, and a handler in a worker thread can accept it too.
+
+A handler accepts it by returning `http.websocket(options)`, or refuses it by returning any other response, eg. 403. If no handler answers, the server responds with 404 as usual.
+
+### http.websocket(options)
+
+The response accepting a websocket upgrade:
+
+| Option | |
+| --- | --- |
+| `name` | required: the websocket's name, to send to it. A newer websocket with the same name replaces the older one, which is closed with code 4000 |
+| `service` | required: the name of the PULL service that receives the websocket's events |
+| `context` | plain values sent with each event, eg. the user or session it belongs to. By default `{}` |
+
+It raises an error without a name or service.
+
+- **Choosing names:** the handler is usually best placed to name the websocket, eg. after the session or user it belongs to. Then sending to a user needs no lookup, and a reconnecting browser replaces its old websocket. For more than one websocket per user, add something unique to the name, eg. `crypto.random_token(8)`.
+- **Refused upgrades:**
+  - An accepted request that isn't a valid websocket upgrade is answered with 400, or 426 for an unsupported version.
+  - It's answered with 503 if the server has no `websockets` option, or the named service isn't a PULL service being served.
+  - The service's API must include `opened`, `message` and `closed`.
+
+### Events
+
+The service named when a websocket is accepted receives these calls, in order, for each websocket:
+
+| | |
+| --- | --- |
+| `opened(name, context)` | the websocket is open |
+| `message(name, context, message)` | a message from the browser, decoded from JSON |
+| `closed(name, context, code)` | the websocket has closed, with its close code, eg. 1000 for a normal close, 1001 after the timeout, 1006 if the connection dropped, or 4000 if it was replaced |
+
+When a websocket is replaced, the older one's `closed` comes before the newer one's `opened`, if both go to the same service.
+
+A message that isn't JSON closes the websocket with code 1007.
+
+### Sending
+
+The server serves a PULL service, named by its `websockets` option, which any thread can connect to:
+
+| | |
+| --- | --- |
+| `send(name, message)` | sends a message, a table encoded as JSON, or a string of JSON. A message for a name with no websocket is dropped |
+| `disconnect(name, code, reason)` | closes a websocket, with a close code and reason |
+
+Sending never waits. A websocket that isn't reading what's sent to it is closed, like any other connection.
+
+### Keeping websockets open
+
+The server answers pings, and pings websockets that have been quiet for half the `websocket_timeout`. Browsers answer automatically. A websocket with nothing received for the whole timeout is closed with code 1001.
+
+Behind nginx, websocket routes need the upgrade headers passed on, and a read timeout longer than the websocket timeout:
+
+```
+location /live {
+	proxy_pass http://upstream;
+	proxy_http_version 1.1;
+	proxy_set_header Upgrade $http_upgrade;
+	proxy_set_header Connection "upgrade";
+	proxy_read_timeout 300;
+}
+```
+
+### A websocket client
+
+`rascal.http.websocket` has a minimal client, for tests and local tools. Like `http.fetch`, it blocks its thread, so never connect to a server running in the same thread.
+
+```lua
+local websocket = require('rascal.http.websocket')
+local socket = websocket.connect('ws://127.0.0.1:8080/live')
+socket:send({ emoji = '🎉' })
+local message = socket:receive(1000)    -- the next message, or nil after 1000ms
+socket:close()
+```
+
+| | |
+| --- | --- |
+| `websocket.connect(url, headers, timeout)` | connects to a `ws://` URL, raising an error with the status if the server refuses |
+| `socket:send(message)` | sends a table as JSON, or a string of JSON |
+| `socket:receive(timeout)` | the next message, decoded, or nil after timeout milliseconds or if the websocket closes. Then `socket.closed` has its `code` and `reason` |
+| `socket:close(code, reason)` | closes the websocket, waiting up to a second for the server to answer |
+
 ## The client
 
 ### http.fetch(method, url, body, headers, timeout)
@@ -248,6 +371,8 @@ It's a minimal client, for tests and local services:
 - **Blocking:** it blocks its thread until the response arrives, so never call a server running in the same thread.
 - **Timeout:** it raises an error after `timeout` milliseconds, 10000 by default.
 - **Plain HTTP only:** it supports `http://` URLs, with no TLS, redirects or chunked responses.
+
+For websockets, see [a websocket client](#a-websocket-client).
 
 ## Utilities
 

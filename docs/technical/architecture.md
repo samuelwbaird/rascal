@@ -131,6 +131,12 @@ Some choices in how this works:
 - **Workers are a balanced service.** `http.workers` is `services.serve_balanced` with a handler API, so slow handlers move to other threads with one change to the routing.
 - **Sending never blocks.** The STREAM socket's send timeout is zero, so a client that stops reading is disconnected, rather than stalling every other connection in the thread.
 - **Plain HTTP/1.1.** There's no TLS, HTTP/2 or chunked request bodies. A server is expected to sit behind a proxy that terminates TLS.
+- **Websockets are held by the server, by name.**
+  - **Authorising:** a websocket upgrade goes through the handlers like any request, so the code that knows the session or user decides whether to accept it, and names it.
+  - **Holding:** the server holds each websocket as a connection with a name, not a coroutine or ZeroMQ socket of its own.
+  - **Receiving:** each websocket's messages are pushed, in order, to the service named when it was accepted.
+  - **Sending:** any thread sends to a websocket by name, through a PULL service the server serves.
+  - **Why push rather than pull:** pushing keeps each websocket's messages in order, which a queue that several consumers pull from wouldn't.
 
 Some features are deliberately left for later, or for programs to add themselves:
 - **Compression** is better done by the proxy in front.
