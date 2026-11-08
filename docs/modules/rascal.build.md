@@ -4,7 +4,7 @@ What the executable was built with. It's a C module, compiled in from [`src/rasc
 
 ```lua
 local build = require('rascal.build')
-print(build.version, build.platform, build.lua_version)   -- 0.2.1  darwin-arm64  Lua 5.4.9
+print(build.version, build.platform, build.lua_version)   -- 0.3.0  darwin-arm64  Lua 5.4.9
 for name, version in pairs(build.dependencies) do
 	print(name, version)
 end

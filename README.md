@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/samuelwbaird/rascal/main/install.sh
 ```
 
 `install.sh` installs the latest release for macOS (arm64, x86_64) or Linux (x86_64, aarch64). The Linux executables are fully static, so they run on any distribution, or in any container. It installs to `~/.local/bin`, or `/usr/local/bin` as root.
-- **Settings:** `PREFIX=...` to install elsewhere, and `RASCAL_VERSION=0.2.1` for a particular release.
+- **Settings:** `PREFIX=...` to install elsewhere, and `RASCAL_VERSION=0.3.0` for a particular release.
 - **Without a prebuilt executable,** or with `RASCAL_FROM_SOURCE=1`, it builds from source. That needs make, a C and C++ compiler and tar. Each release includes every dependency's download, so a source build only needs GitHub.
 
 With Homebrew, on macOS or Linux:
@@ -32,7 +32,7 @@ The Linux executables are fully static, so the simplest way into any image is to
 ```dockerfile
 # download rascal for this image's architecture, and check it against the release's checksums
 FROM alpine:3.22 AS rascal
-ARG RASCAL_VERSION=0.2.1
+ARG RASCAL_VERSION=0.3.0
 ARG TARGETARCH
 RUN apk add --no-cache curl \
  && case "$TARGETARCH" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; *) exit 1 ;; esac \
@@ -51,7 +51,7 @@ COPY --from=rascal /usr/local/bin/rascal /usr/local/bin/rascal
 In an image that already has `curl`, the install script works too:
 
 ```dockerfile
-RUN curl -fsSL https://raw.githubusercontent.com/samuelwbaird/rascal/main/install.sh | RASCAL_VERSION=0.2.1 sh
+RUN curl -fsSL https://raw.githubusercontent.com/samuelwbaird/rascal/main/install.sh | RASCAL_VERSION=0.3.0 sh
 ```
 
 ### Downloads
@@ -209,7 +209,7 @@ Releases are built by `.github/workflows/release.yml` when a version tag is push
 2. Tag the commit and push the tag:
 
 ```bash
-git tag v0.2.1 && git push origin v0.2.1
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 The workflow checks that the tag matches `VERSION`, then builds, tests and packages each platform, creates the GitHub release, and updates the Homebrew formula in [samuelwbaird/homebrew-tap](https://github.com/samuelwbaird/homebrew-tap). See [Building](docs/technical/building.md#releases) for the details, including the `HOMEBREW_TAP_TOKEN` secret the tap needs.
