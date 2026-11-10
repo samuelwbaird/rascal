@@ -15,7 +15,7 @@
 # Dependencies are declared one per file in deps/*.mk, embedded Lua modules
 # live under lua/, and rascal's own C code is in src/. See README.md.
 
-VERSION := 0.3.0
+VERSION := 0.4.0
 
 # the default target, defined below
 .PHONY: all
