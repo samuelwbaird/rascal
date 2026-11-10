@@ -93,7 +93,7 @@ To build from a clone instead, use `make && make install`. That needs `xcode-sel
 
 ## Using it
 
-`rascal` is the standard Lua interpreter, so `rascal script.lua`, `rascal -e`, `rascal -l` and the REPL all work as usual. Every library above is available with `require`, with nothing on disk.
+`rascal script.lua args` runs a script, and `rascal` alone starts an interactive prompt, with line editing from [linenoise](https://github.com/antirez/linenoise), Tab completion of names and fields, and history kept in `~/.rascal_history`. Every library above is available with `require`, with nothing on disk.
 
 ```lua
 -- hello.lua: rascal hello.lua, then open http://127.0.0.1:8080/
@@ -106,11 +106,27 @@ end)
 server:listen('tcp://*:8080')
 ```
 
-A few things differ from standard Lua:
-- **Init:** every Lua state first runs the embedded [`init`](docs/modules/init.md) module, which makes [prelude](docs/modules/prelude.md) global, and adds a `log` function and the thread's messaging `loop`. Start rascal with `--no-init` to skip it.
+rascal has its own options, rather than those of the standard `lua` command:
+
+| Option | |
+| --- | --- |
+| `--exec code` | run Lua code |
+| `--load file` | run a Lua file, then continue to the prompt |
+| `--multiline` | wrap long lines at the prompt, rather than scrolling them |
+| `--path dir` | find Lua modules in `dir`, rather than the current directory. Repeat it to search more than one directory |
+| `--allow-libs` | allow native C modules, from `dir/?.so` for each `--path`, or else Lua's default search paths |
+| `--prefer-files` | search for modules on the path before the embedded modules, eg. to work on a module under `lua/` without rebuilding |
+| `--no-init` | don't run the [init](docs/modules/init.md) module |
+| `-v`, `--version` | show the rascal and Lua versions |
+| `-h`, `--help` | show the options |
+
+`--exec` and `--load` run in the order given, before the script. Options come before the script name, and anything after it is the script's.
+
+A few other things differ from standard Lua:
+- **Init:** every Lua state first runs the embedded [`init`](docs/modules/init.md) module, which makes [prelude](docs/modules/prelude.md) global, and adds a `log` function and the thread's messaging `loop`.
 - **Running to completion:** once the script is complete, its loop runs until it has no sockets, timers or threads left, so a server keeps serving without any explicit "run" call. See [running to completion](docs/modules/rascal.messaging.md#running-to-completion).
-- **Environment:** rascal ignores `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`, so it's isolated from any other Lua installation. Use `RASCAL_PATH`, `RASCAL_CPATH` and `RASCAL_INIT` instead. The default path is only `./?.lua;./?/init.lua`.
-- **Embedded modules first:** embedded modules take priority over files on disk. `RASCAL_PREFER_FILES=1` searches `package.path` first, eg. to work on a module under `lua/` without rebuilding.
+- **Modules:** embedded modules take priority over files on disk, and by default files are only found in the current directory, as `./?.lua` and `./?/init.lua`. rascal ignores `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`, so it's isolated from any other Lua installation.
+- **No native libraries by default:** only the C modules compiled into rascal can be loaded, unless it's started with `--allow-libs`.
 
 ## Documentation
 

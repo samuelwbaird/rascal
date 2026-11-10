@@ -116,7 +116,8 @@ main() {
 		make -C "$source_dir" install PREFIX="$prefix" >/dev/null
 	fi
 
-	"$prefix/bin/rascal" -e "print('installed rascal ' .. require('rascal.build').version .. ' at $prefix/bin/rascal')"
+	# code on stdin works with every version, before and after rascal had its own options
+	echo "print('installed rascal ' .. require('rascal.build').version .. ' at $prefix/bin/rascal')" | "$prefix/bin/rascal"
 	case ":$PATH:" in
 		*":$prefix/bin:"*) ;;
 		*) echo "add $prefix/bin to your PATH to use it, eg. export PATH=\"$prefix/bin:\$PATH\"" ;;

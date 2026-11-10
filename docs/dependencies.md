@@ -187,6 +187,17 @@ To add another, see [Adding dependencies](technical/adding-dependencies.md).
 | Documentation | [libsodium documentation](https://doc.libsodium.org/) |
 | Declared in | [`deps/libsodium.mk`](../deps/libsodium.mk), built with its own configure script as a static library, with `--enable-minimal` |
 
+## linenoise
+
+| | |
+| --- | --- |
+| Version | 2.0 |
+| require | none, it's used directly by rascal's interpreter in [`src/main.c`](../src/main.c) |
+| Used for | line editing, Tab completion, history and the `--multiline` option at the interactive prompt |
+| Home | https://github.com/antirez/linenoise |
+| Documentation | [linenoise README](https://github.com/antirez/linenoise#readme) |
+| Declared in | [`deps/linenoise.mk`](../deps/linenoise.mk) |
+
 ## prelude
 
 [prelude](https://github.com/samuelwbaird/prelude) is embedded from [`lua/prelude.lua`](../lua/prelude.lua) rather than downloaded. It is documented with rascal's own modules, in [prelude](modules/prelude.md).

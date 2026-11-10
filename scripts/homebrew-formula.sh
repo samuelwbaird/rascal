@@ -57,7 +57,7 @@ class Rascal < Formula
   end
 
   test do
-    output = shell_output("#{bin}/rascal -e \"print(require('rascal.build').version)\"")
+    output = pipe_output("#{bin}/rascal", "print(require('rascal.build').version)")
     assert_equal version.to_s, output.strip
   end
 end

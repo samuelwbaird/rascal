@@ -3,7 +3,6 @@
 */
 
 #include <pthread.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "zmq.h"
@@ -16,6 +15,10 @@
 
 
 int rascal_init_enabled = 1;
+int rascal_allow_libs = 0;
+int rascal_prefer_files = 0;
+const char *rascal_path = NULL;
+const char *rascal_cpath = NULL;
 
 
 static const rascal_LuaModule *find_luamodule (const char *name) {
@@ -53,18 +56,50 @@ static int searcher_embedded (lua_State *L) {
 }
 
 
+/* package.loadlib, when native libraries are not allowed */
+static int no_loadlib (lua_State *L) {
+  luaL_pushfail(L);
+  lua_pushliteral(L, "native libraries are not allowed, start rascal with --allow-libs");
+  lua_pushliteral(L, "absent");
+  return 3;
+}
+
+
 /*
-** Embedded modules are searched straight after package.preload, so the
-** executable behaves the same wherever it runs. Set RASCAL_PREFER_FILES=1
-** to search package.path first, eg. while working on an embedded module.
+** Set the module search paths, and unless native libraries are allowed,
+** remove the searchers for C modules (the 3rd and 4th, after preload and
+** Lua files) and package.loadlib. Then insert the embedded searcher
+** straight after package.preload, so the executable behaves the same
+** wherever it runs, or after package.path with --prefer-files, eg. while
+** working on an embedded module.
 */
-static void install_searcher (lua_State *L) {
-  const char *prefer_files = getenv("RASCAL_PREFER_FILES");
-  lua_Integer position = (prefer_files && *prefer_files && strcmp(prefer_files, "0") != 0) ? 3 : 2;
+static void setup_package (lua_State *L) {
+  lua_Integer position = rascal_prefer_files ? 3 : 2;
   lua_Integer i;
 
   lua_getglobal(L, LUA_LOADLIBNAME);
+  if (rascal_path != NULL) {
+    lua_pushstring(L, rascal_path);
+    lua_setfield(L, -2, "path");
+  }
+  if (rascal_cpath != NULL) {
+    lua_pushstring(L, rascal_cpath);
+    lua_setfield(L, -2, "cpath");
+  }
+  if (!rascal_allow_libs) {
+    lua_pushliteral(L, "");
+    lua_setfield(L, -2, "cpath");
+    lua_pushcfunction(L, no_loadlib);
+    lua_setfield(L, -2, "loadlib");
+  }
+
   lua_getfield(L, -1, "searchers");
+  if (!rascal_allow_libs) {
+    lua_pushnil(L);
+    lua_rawseti(L, -2, 4);
+    lua_pushnil(L);
+    lua_rawseti(L, -2, 3);
+  }
   for (i = (lua_Integer)lua_rawlen(L, -1); i >= position; i--) {
     lua_rawgeti(L, -1, i);
     lua_rawseti(L, -2, i + 1);
@@ -78,6 +113,9 @@ static void install_searcher (lua_State *L) {
 void rascal_openlibs (lua_State *L) {
   const rascal_CModule *m;
 
+  /* package.path and cpath never come from LUA_PATH or LUA_CPATH */
+  lua_pushboolean(L, 1);
+  lua_setfield(L, LUA_REGISTRYINDEX, "LUA_NOENV");
   luaL_openlibs(L);
 
   luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE);
@@ -87,7 +125,7 @@ void rascal_openlibs (lua_State *L) {
   }
   lua_pop(L, 1);
 
-  install_searcher(L);
+  setup_package(L);
 
   if (rascal_init_enabled) {
     lua_getglobal(L, "require");
@@ -101,9 +139,9 @@ void rascal_openlibs (lua_State *L) {
 
 
 /*
-** Called by the interpreter (see patches/lua) once the script is complete.
-** If rascal.messaging has been loaded, push its complete function to run
-** this thread's loop until all of its work is done.
+** Called by the interpreter once the script and any interactive prompt are
+** complete. If rascal.messaging has been loaded, push its complete function
+** to run this thread's loop until all of its work is done.
 */
 int rascal_push_complete (lua_State *L) {
   lua_getfield(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);

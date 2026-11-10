@@ -28,12 +28,12 @@ local function run(command_line)
 	return output
 end
 
-expect_equal(run([[-e "print(type(class))"]]), 'function')
-expect_equal(run([[--no-init -e "print(type(class), require('rascal.build').initialised)"]]), 'nil\tfalse')
-expect_equal(run([[-e "x = 1" --no-init -e "print(x, type(class))"]]), '1\tnil')
+expect_equal(run([[--exec "print(type(class))"]]), 'function')
+expect_equal(run([[--no-init --exec "print(type(class), require('rascal.build').initialised)"]]), 'nil\tfalse')
+expect_equal(run([[--exec "x = 1" --no-init --exec "print(x, type(class))"]]), '1\tnil')
 
 -- threads started by a --no-init rascal skip init as well
-expect_equal(run([[--no-init -e "local t = require('llthreads2').new('return type(class)') t:start() print(select(2, t:join()))"]]), 'nil')
+expect_equal(run([[--no-init --exec "local t = require('llthreads2').new('return type(class)') t:start() print(select(2, t:join()))"]]), 'nil')
 
 -- after the script name, --no-init is just an argument to the script
 local script = os.tmpname()
@@ -45,5 +45,5 @@ os.remove(script)
 
 -- init defines a global log function writing to stderr
 expect_equal(type(log), 'function')
-local logged = run([[-e "log('hello', 42, nil)"]])
+local logged = run([[--exec "log('hello', 42, nil)"]])
 assert(logged:match('^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d hello 42 nil$'), logged)

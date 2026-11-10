@@ -20,7 +20,7 @@ A module with its own licence should have it in `lua/LICENSE.<name>`, which is t
 While working on a module, run it from the file rather than rebuilding each time:
 
 ```bash
-RASCAL_PREFER_FILES=1 RASCAL_PATH='lua/?.lua;lua/?/init.lua' build/darwin-arm64/bin/rascal app.lua
+build/darwin-arm64/bin/rascal --prefer-files --path lua app.lua
 ```
 
 ### Conventions for embedded modules

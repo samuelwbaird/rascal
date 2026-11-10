@@ -36,8 +36,7 @@ expect_equal(rascal.source('no.such.module'), nil)
 local ok, err = pcall(require, 'no.such.module')
 assert(not ok and err:find("no embedded module 'no.such.module'", 1, true), err)
 
--- module search paths come from RASCAL_PATH / RASCAL_CPATH, never LUA_PATH
-assert(not package.path:find('/usr/local/', 1, true), package.path)
-if not os.getenv('RASCAL_PATH') then
-	expect_equal(package.path, './?.lua;./?/init.lua')
-end
+-- by default modules are found only in the current directory, never from
+-- LUA_PATH, and native libraries are not loaded (see command_line.lua)
+expect_equal(package.path, './?.lua;./?/init.lua')
+expect_equal(package.cpath, '')

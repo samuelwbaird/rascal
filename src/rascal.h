@@ -39,8 +39,23 @@ extern const rascal_Dependency rascal_dependencies[];
 /* the module run by rascal_openlibs once a state is set up */
 #define RASCAL_INIT_MODULE "init"
 
-/* cleared by the --no-init command line option */
+/*
+** Set from the command line by src/main.c, before any Lua state is opened,
+** and applied by rascal_openlibs to every state, including each thread's.
+**
+**   rascal_init_enabled   cleared by --no-init
+**   rascal_allow_libs     set by --allow-libs, native C modules can be loaded
+**   rascal_prefer_files   set by --prefer-files, package.path is searched
+**                         before the embedded modules
+**   rascal_path, _cpath   package.path and package.cpath, or NULL for Lua's
+**                         compiled in defaults (cpath is always empty unless
+**                         native libraries are allowed)
+*/
 extern int rascal_init_enabled;
+extern int rascal_allow_libs;
+extern int rascal_prefer_files;
+extern const char *rascal_path;
+extern const char *rascal_cpath;
 
 /*
 ** Open the standard libraries, preload the compiled in C modules, install
@@ -57,7 +72,7 @@ int luaopen_rascal_build (lua_State *L);
 /* require 'rascal.context', the process wide ZeroMQ context as a lightuserdata */
 int luaopen_rascal_context (lua_State *L);
 
-/* see patches/lua, pushes rascal.messaging.complete if that module is loaded */
+/* pushes rascal.messaging.complete if that module is loaded, see src/main.c */
 int rascal_push_complete (lua_State *L);
 
 #endif

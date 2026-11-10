@@ -42,19 +42,12 @@ RASCAL_WARNINGS := -Wall -Wextra
 LINK := $(CXX)
 LDFLAGS ?=
 
-# rascal reads RASCAL_PATH, RASCAL_CPATH and RASCAL_INIT rather than LUA_PATH,
-# LUA_CPATH and LUA_INIT, so it is unaffected by any other Lua installation's
-# settings, and by default only searches the current directory for modules
-LUA_ENV_DEFS := \
-	-DLUA_PATH_VAR='"RASCAL_PATH"' -DLUA_CPATH_VAR='"RASCAL_CPATH"' -DLUA_INIT_VAR='"RASCAL_INIT"' \
-	-DLUA_PATH_DEFAULT='"./?.lua;./?/init.lua"' -DLUA_CPATH_DEFAULT='"./?.so"'
-
 ifeq ($(UNAME_S),Darwin)
   # the oldest macOS the executable runs on, whatever it is built on
   export MACOSX_DEPLOYMENT_TARGET ?= 12.0
   # archives made here leave out macOS file attributes, which other systems warn about
   ARCHIVE_FLAGS := --no-mac-metadata --no-xattrs
-  LUA_DEFS := -DLUA_COMPAT_5_3 $(LUA_ENV_DEFS) -DLUA_USE_MACOSX
+  LUA_DEFS := -DLUA_COMPAT_5_3 -DLUA_USE_MACOSX
   LIBS :=
   HOST_LIBS :=
   ifeq ($(STATIC),full)
@@ -62,10 +55,10 @@ ifeq ($(UNAME_S),Darwin)
   endif
 else
   ifeq ($(STATIC),full)
-    LUA_DEFS := -DLUA_COMPAT_5_3 $(LUA_ENV_DEFS) -DLUA_USE_POSIX
+    LUA_DEFS := -DLUA_COMPAT_5_3 -DLUA_USE_POSIX
     LDFLAGS += -static
   else
-    LUA_DEFS := -DLUA_COMPAT_5_3 $(LUA_ENV_DEFS) -DLUA_USE_LINUX
+    LUA_DEFS := -DLUA_COMPAT_5_3 -DLUA_USE_LINUX
     # export Lua API symbols so that external C modules can still be loaded
     LDFLAGS += -Wl,-E -static-libstdc++ -static-libgcc
   endif

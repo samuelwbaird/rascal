@@ -86,7 +86,7 @@ Changing options doesn't clean the build. Run `make clean` after changing `CC` o
 **macOS** doesn't allow fully static executables. All third party code is linked statically, and the executable depends only on `libSystem` and `libc++`. It runs on macOS 12 and later, whatever it's built on, as `MACOSX_DEPLOYMENT_TARGET` is set to 12.0.
 
 **Linux** has two choices:
-- **`STATIC=deps`**, the default, links every dependency statically against glibc, with libstdc++ and libgcc also linked statically. The executable depends only on glibc. It exports the Lua API, so external C modules can still be loaded with `require`, from `RASCAL_CPATH`.
+- **`STATIC=deps`**, the default, links every dependency statically against glibc, with libstdc++ and libgcc also linked statically. The executable depends only on glibc. It exports the Lua API, so external C modules can still be loaded with `require`, when rascal is started with `--allow-libs`.
 - **`STATIC=full`** builds a completely static executable. It's meant for musl, eg. Alpine, and the result runs on any Linux of the same architecture, including in a `FROM scratch` container. External C modules can't be loaded in this mode. This is how the Linux releases are built.
 
 `make test` checks this with [`scripts/check-linkage.sh`](../../scripts/check-linkage.sh), which fails if the executable links any library other than those expected.

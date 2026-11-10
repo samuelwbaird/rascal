@@ -11,7 +11,7 @@ loop:add_once(100, function () log('later') end)
 
 ## When it runs
 
-It runs once the standard libraries, compiled in modules and the embedded module searcher are set up. That's before `RASCAL_INIT`, `-e`, `-l` and the script, and before the global `arg` table exists.
+It runs once the standard libraries, compiled in modules and the embedded module searcher are set up. That's before `--exec`, `--load` and the script, and before the global `arg` table exists.
 
 If it raises an error:
 - in the main state, rascal exits, reporting `rascal init failed: <error>`
@@ -20,8 +20,7 @@ If it raises an error:
 ## Skipping it
 
 `rascal --no-init script.lua` skips it, in the main state and in every thread.
-- **Where the option goes:** `--no-init` must come before the script name. After the script name it's passed to the script, as an ordinary argument.
-- **What it doesn't affect:** it's separate from `RASCAL_INIT` (rascal's `LUA_INIT`), which is skipped with `-E` as in standard Lua.
+`--no-init` must come before the script name. After the script name it's passed to the script, as an ordinary argument.
 
 `require('rascal.build').initialised` is false when init was skipped.
 

@@ -4,7 +4,7 @@ rascal is for writing servers in Lua as a single executable, with nothing instal
 
 ## One executable
 
-rascal is the standard Lua interpreter, `lua.c`, linked with every dependency and an embedded library of Lua modules. So `rascal script.lua`, `-e`, `-l` and the REPL all work as in standard Lua, and a program is a Lua script plus the rascal executable.
+rascal is a Lua interpreter linked with every dependency and an embedded library of Lua modules. A program is a Lua script plus the rascal executable, run with `rascal script.lua`.
 
 Everything is compiled from source, at pinned versions, and linked statically, apart from the platform's system libraries. A program can't depend on something that happens to be installed on the build machine, and it runs the same on any machine with the same platform. On Linux, a fully static build runs on any distribution, or in an empty container. See [Building](building.md#static-linking).
 
@@ -17,36 +17,52 @@ rascal uses Lua 5.4 rather than 5.5, as lzmq and llthreads2 predate 5.5. The ver
 ### Modules in the executable
 
 [`src/rascal.c`](../../src/rascal.c) has `rascal_openlibs`, which opens every Lua state rascal creates, in place of `luaL_openlibs`. It:
-1. opens the standard libraries
+1. opens the standard libraries, without reading `LUA_PATH` or `LUA_CPATH`
 2. registers the compiled in C modules in `package.preload`
-3. adds a searcher for the embedded Lua modules, straight after the preload searcher, so they take priority over files on disk
-4. runs the [init](../modules/init.md) module, unless rascal was started with `--no-init`
+3. sets `package.path` from the command line, and unless native libraries are allowed, removes the searchers for C modules and `package.loadlib`
+4. adds a searcher for the embedded Lua modules, straight after the preload searcher, so they take priority over files on disk
+5. runs the [init](../modules/init.md) module, unless rascal was started with `--no-init`
 
 The embedded Lua modules are the files under [`lua/`](../../lua), and Lua files that dependencies ship. They're embedded as source, generated into C by [`tools/embed.lua`](../../tools/embed.lua) at build time. Each keeps its original path as its chunk name, so errors and stack traces point to the real file, eg. `lua/rascal/services.lua:120:`. `require('rascal.build').source(name)` returns a module's source.
 
-`lua.c` is compiled with `-DluaL_openlibs=rascal_openlibs`, so the interpreter's main state is opened this way without changing its source. llthreads2 is compiled the same way, so each thread's state has the same modules too. Any C module that creates Lua states needs this, see [Adding dependencies](adding-dependencies.md#c-modules-that-create-lua-states).
+The interpreter's main state is opened this way, and llthreads2 is compiled with `-DluaL_openlibs=rascal_openlibs`, so each thread's state has the same modules and paths too. Any C module that creates Lua states needs this, see [Adding dependencies](adding-dependencies.md#c-modules-that-create-lua-states).
 
 ### Isolated from other Lua installations
 
-rascal reads `RASCAL_PATH`, `RASCAL_CPATH` and `RASCAL_INIT`, rather than `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`. Its default path is only `./?.lua;./?/init.lua`. So a program behaves the same whatever other Lua is installed, and however it's configured.
+rascal ignores `LUA_PATH`, `LUA_CPATH` and `LUA_INIT`, and has no environment variables of its own for them. Modules on disk are found in the current directory, as `./?.lua` and `./?/init.lua`, or in each directory given with `--path`. So a program behaves the same whatever other Lua is installed, and however it's configured.
 
-`RASCAL_PREFER_FILES=1` searches `package.path` before the embedded modules. This is for working on rascal's own modules without rebuilding:
+### No native libraries by default
+
+Only the C modules compiled into rascal can be loaded. Without `--allow-libs`:
+- `package.cpath` is empty
+- the searchers for C modules are removed from `package.searchers`
+- `package.loadlib` returns nil, with an error message
+
+With `--allow-libs`, `require` finds C modules as `dir/?.so` in each `--path` directory. Without `--path`, it uses Lua's default paths, which include `/usr/local/share/lua/5.4/` and `/usr/local/lib/lua/5.4/`.
+
+This keeps programs to the code that's compiled in, or that's in their own directories, so a C module that happens to be installed can't change how they run. It isn't a sandbox: Lua code can still use `io`, `os` and the rest of the standard library. A fully static Linux build can't load C modules even with `--allow-libs`, see [Building](building.md#static-linking).
+
+`--prefer-files` searches `package.path` before the embedded modules. This is for working on rascal's own modules without rebuilding:
 
 ```bash
-RASCAL_PREFER_FILES=1 RASCAL_PATH='lua/?.lua;lua/?/init.lua' rascal app.lua
+rascal --prefer-files --path lua app.lua
 ```
 
 ### Command line
 
-[`src/main.c`](../../src/main.c) removes rascal's own option, `--no-init`, from the command line, then hands the rest to `lua.c`, whose `main` is renamed `lua_main`. Options after the script name are always the script's own.
+[`src/main.c`](../../src/main.c) is rascal's own interpreter, in place of the standard `lua.c`. It has its own options, listed in the [README](../../README.md#using-it), rather than Lua's `-e`, `-l`, `-i`, `-E` and `-W`. They're read before any Lua state is opened, since the path settings apply to every state, including each thread's. Options after the script name are always the script's own, and the global `arg` is set up as in standard Lua.
 
-The REPL has no line editing, as readline is left out to avoid an external dependency.
+The interactive prompt uses [linenoise](https://github.com/antirez/linenoise) for line editing and history, as it's small and has no dependencies. Like Lua's own prompt, it shows the value of an expression, and continues a statement that isn't finished on the next line. Ctrl-C clears the line, or interrupts the code that's running, and Ctrl-D exits.
+- **Tab completion:** Tab completes keywords, globals, and fields of tables reached by name, eg. `string.fo` or `crypto.hash_`. After `:` it offers only functions, so `s:up` completes to `s:upper` for a string `s`, as fields are also looked up through `__index` tables. It doesn't evaluate anything, so names after an expression, eg. `f():`, aren't completed, and with nothing to complete, Tab inserts a tab.
+- **History:** the last 1000 lines are kept in `~/.rascal_history`, readable only by you, and saved as each line is entered.
+
+When stdin isn't a terminal, the prompt reads lines without editing or history, so `--load` can also take statements from a pipe.
 
 ## Running to completion
 
 A server's script sets up sockets, services and timers, then reaches its end. Rather than exiting there, rascal runs the main thread's loop until it has nothing more to do.
 
-This is a small patch to `lua.c` ([`patches/lua`](../../patches/lua)). Once the script, `-e`, `-l` and any REPL are done, it calls `rascal_push_complete`. If `rascal.messaging` has been loaded, this returns `messaging.complete`, which `lua.c` runs like the script, with the same error reporting and Ctrl-C handling. Threads do the same after their code.
+Once `--exec`, `--load`, the script and any prompt are done, the interpreter calls `rascal_push_complete`. If `rascal.messaging` has been loaded, this returns `messaging.complete`, which runs like the script, with the same error reporting and Ctrl-C handling. The main thread's loop doesn't run while the prompt waits for input. Threads do the same after their code.
 
 A thread, or the process, has no more to do once it has:
 - no sockets in its loop

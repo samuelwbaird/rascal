@@ -11,7 +11,8 @@ lua_CORE_FILES := lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject
                   lopcodes lparser lstate lstring ltable ltm lundump lvm lzio
 lua_STDLIB_FILES := lauxlib lbaselib lcorolib ldblib liolib lmathlib loadlib loslib \
                     lstrlib ltablib lutf8lib linit
-# lua.c (the interpreter main) is compiled separately, see the Makefile
+# lua.c (the standard interpreter) only builds the host lua for build tools,
+# rascal has its own interpreter in src/main.c
 lua_SRCS := $(foreach f,$(lua_CORE_FILES) $(lua_STDLIB_FILES),src/$(f).c)
 lua_INCLUDES := -I$(SRC)/lua/src
 

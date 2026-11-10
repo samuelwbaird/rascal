@@ -65,3 +65,4 @@ Each is downloaded at a pinned version, checked against its sha256 and compiled 
 | picohttpparser | `rascal.http.parser` | [picohttpparser](https://github.com/h2o/picohttpparser#readme) |
 | Mbed TLS | `rascal.crypto.core` | [Mbed TLS documentation](https://mbed-tls.readthedocs.io/) |
 | libsodium | `rascal.crypto.sodium` | [libsodium documentation](https://doc.libsodium.org/) |
+| linenoise | | [linenoise README](https://github.com/antirez/linenoise#readme), for the interactive prompt |
