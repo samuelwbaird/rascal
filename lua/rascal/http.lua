@@ -67,8 +67,9 @@
 --   Request bodies sent with gzip are always decoded, and still limited to
 --   max_body_size. See rascal.http.compression.
 --
--- http.fetch(method, url, body, headers) is a minimal plain HTTP client, for
--- tests and local services. It accepts gzip, and decodes it. It blocks its thread.
+-- http.fetch(method, url, body, headers) is a minimal HTTP client. It accepts
+-- gzip, and decodes it. https:// urls are fetched with the curl command, which
+-- must be installed. It blocks its thread.
 
 local prelude = require('prelude')
 local cjson = require('cjson')
@@ -1089,16 +1090,126 @@ end
 
 -- a minimal client -----------------------------------------------------------------------------
 
--- make a plain HTTP request and return the response, with status, headers
+-- quote a value for a curl config file, refusing line breaks, which would end the line
+local function curl_quote(value)
+	value = tostring(value)
+	if value:find('[\r\n%z]') then
+		error('http: fetch headers and urls cannot contain line breaks', 0)
+	end
+	return '"' .. value:gsub('[\\"]', '\\%0') .. '"'
+end
+
+-- the last response in a file of headers from curl, which has each response
+-- it received, eg. a 100 continue before the final one. The status lines of
+-- HTTP/2 and 3 responses are read as HTTP/1.1, which is all the parser reads
+local function curl_headers(text)
+	local response
+	while text:find('^HTTP/') do
+		text = text:gsub('^HTTP/[23][%.0-9]*', 'HTTP/1.1')
+		local parsed, length = parser.parse_response(text)
+		if not parsed then
+			break
+		end
+		response = parsed
+		text = text:sub(length + 1)
+	end
+	return response
+end
+
+-- an http request made with the curl command, returning the same as http.fetch.
+-- The url, headers and options are given to curl in a config file, and the body
+-- in a file, so nothing is quoted for the shell, and nothing is shown in ps
+function http.fetch_curl(method, url, body, headers, timeout)
+	if type(url) ~= 'string' or not url:find('^https?://') then
+		error('http: fetch needs an http:// or https:// url, not ' .. tostring(url), 2)
+	end
+	local config_path, body_path, headers_path, output_path = os.tmpname(), os.tmpname(), os.tmpname(), os.tmpname()
+	local function remove_files()
+		os.remove(config_path)
+		os.remove(body_path)
+		os.remove(headers_path)
+		os.remove(output_path)
+	end
+
+	local ok, result = pcall(function ()
+		local seconds = (timeout or 10000) / 1000
+		local lines = {
+			'url = ' .. curl_quote(url),
+			'silent',
+			'show-error',
+			'compressed',
+			'max-time = ' .. seconds,
+			'dump-header = ' .. curl_quote(headers_path),
+			'output = ' .. curl_quote(output_path),
+			-- curl waits for 100 continue before sending a large body, unless told not to
+			'header = "Expect:"',
+		}
+		if method == 'HEAD' then
+			lines[#lines + 1] = 'head'
+		else
+			lines[#lines + 1] = 'request = ' .. curl_quote(method)
+		end
+		for name, value in pairs(headers or {}) do
+			lines[#lines + 1] = 'header = ' .. curl_quote(name .. ': ' .. value)
+		end
+		if body and body ~= '' then
+			local file = assert(io.open(body_path, 'wb'))
+			file:write(body)
+			file:close()
+			lines[#lines + 1] = 'data-binary = ' .. curl_quote('@' .. body_path)
+		elseif method ~= 'GET' and method ~= 'HEAD' then
+			lines[#lines + 1] = 'header = "Content-Length: 0"'
+		end
+		local file = assert(io.open(config_path, 'wb'))
+		file:write(table.concat(lines, '\n'), '\n')
+		file:close()
+
+		local process = assert(io.popen("curl --disable --config '" .. config_path .. "' 2>&1", 'r'))
+		local messages = process:read('a')
+		local _, _, code = process:close()
+		if code == 127 then
+			return 'fetching https:// urls needs the curl command, which is not installed'
+		elseif code ~= 0 then
+			return 'failed, ' .. (messages:gsub('^curl: %(%d+%) ', ''):gsub('%s+$', ''))
+		end
+
+		local header_file = assert(io.open(headers_path, 'rb'))
+		local response = curl_headers(header_file:read('a'))
+		header_file:close()
+		if not response then
+			return 'received an invalid response'
+		end
+		local output = assert(io.open(output_path, 'rb'))
+		local result = response_class(response.status)
+		result.headers = response.headers
+		-- for HEAD, curl writes the headers as the output
+		result.body = method == 'HEAD' and '' or output:read('a')
+		output:close()
+		return result
+	end)
+	remove_files()
+	if not ok then
+		error(result, 2)
+	elseif type(result) == 'string' then
+		error('http: ' .. method .. ' ' .. url .. ' ' .. result, 2)
+	end
+	return result
+end
+
+-- make an HTTP request and return the response, with status, headers
 -- (lower case names), body and response:json(). It accepts gzip unless the
 -- headers give an accept-encoding, and a gzip body is decoded (its headers are
--- kept as they were received). Blocks this thread until the
+-- kept as they were received). https:// urls are fetched with the curl
+-- command (see http.fetch_curl). Blocks this thread until the
 -- response arrives (so never call a server running in this same thread),
 -- raising an error after timeout milliseconds (default 10000)
 function http.fetch(method, url, body, headers, timeout)
-	local host, port, target = url:match('^http://([^/:]+):?(%d*)(.*)$')
+	if type(url) == 'string' and url:find('^https://') then
+		return http.fetch_curl(method, url, body, headers, timeout)
+	end
+	local host, port, target = (url or ''):match('^http://([^/:]+):?(%d*)(.*)$')
 	if not host then
-		error('http: fetch needs an http:// url, not ' .. tostring(url), 2)
+		error('http: fetch needs an http:// or https:// url, not ' .. tostring(url), 2)
 	end
 	port = port ~= '' and port or '80'
 	target = target ~= '' and target or '/'

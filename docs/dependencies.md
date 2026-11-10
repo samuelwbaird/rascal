@@ -100,6 +100,39 @@ To add another, see [Adding dependencies](technical/adding-dependencies.md).
 | Documentation | [LuaFileSystem manual](https://lunarmodules.github.io/luafilesystem/manual.html) |
 | Declared in | [`deps/lfs.mk`](../deps/lfs.mk) |
 
+## LPeg
+
+| | |
+| --- | --- |
+| Version | 1.1.0 |
+| require | `lpeg`, and `re` for its regex like syntax |
+| Used for | parsing with parsing expression grammars, from patterns for a single token to whole languages |
+| Home | https://www.inf.puc-rio.br/~roberto/lpeg/ |
+| Documentation | [LPeg](https://www.inf.puc-rio.br/~roberto/lpeg/), and [re](https://www.inf.puc-rio.br/~roberto/lpeg/re.html) |
+| Declared in | [`deps/lpeg.mk`](../deps/lpeg.mk). Its licence is taken from its html documentation, as it has no licence file |
+
+## luautf8
+
+| | |
+| --- | --- |
+| Version | 0.1.6 |
+| require | `lua-utf8` |
+| Used for | UTF-8 aware versions of the string functions: upper and lower case, sub, reverse, patterns, display width and more. Lua's own `utf8` library is unchanged |
+| Home | https://github.com/starwing/luautf8 |
+| Documentation | [luautf8 README](https://github.com/starwing/luautf8#readme) |
+| Declared in | [`deps/luautf8.mk`](../deps/luautf8.mk), with its `luaopen_utf8` renamed, as Lua's own utf8 library has the same name |
+
+## argparse
+
+| | |
+| --- | --- |
+| Version | 0.7.1 |
+| require | `argparse` |
+| Used for | command line parsing for scripts and tools, with usage and help messages. Pure Lua |
+| Home | https://github.com/luarocks/argparse |
+| Documentation | [argparse tutorial](https://argparse.readthedocs.io/) |
+| Declared in | [`deps/argparse.mk`](../deps/argparse.mk) |
+
 ## zlib
 
 | | |
@@ -142,6 +175,17 @@ To add another, see [Adding dependencies](technical/adding-dependencies.md).
 | Home | https://www.trustedfirmware.org/projects/mbed-tls/ |
 | Documentation | [Mbed TLS documentation](https://mbed-tls.readthedocs.io/), and its [API reference](https://mbed-tls.readthedocs.io/projects/api/en/development/) |
 | Declared in | [`deps/mbedtls.mk`](../deps/mbedtls.mk) |
+
+## libsodium
+
+| | |
+| --- | --- |
+| Version | 1.0.22 |
+| require | `rascal.crypto.sodium`, rascal's own binding in [`src/sodium.c`](../src/sodium.c), used by [rascal.crypto](modules/rascal.crypto.md) |
+| Used for | password hashing (argon2id), secret key encryption (XSalsa20 and Poly1305) and sealed boxes for public key encryption (X25519) |
+| Home | https://libsodium.org |
+| Documentation | [libsodium documentation](https://doc.libsodium.org/) |
+| Declared in | [`deps/libsodium.mk`](../deps/libsodium.mk), built with its own configure script as a static library, with `--enable-minimal` |
 
 ## prelude
 

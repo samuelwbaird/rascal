@@ -148,6 +148,9 @@ expect_error('takes a table of options', http.server, 'not options')
 local server = http.server()
 server:equal('/hello', function (request) return http.text('hello ' .. (request.vars.name or 'world')) end)
 server:equal('/echo', function (request) return http.text(request.method .. ' ' .. #request.body) end)
+server:equal('/echo_body', function (request)
+	return http.text(request.method .. ' ' .. (request.headers['x-test'] or '') .. ' ' .. request.body)
+end)
 server:equal('/cookies', function (request)
 	local response = http.text('cookies')
 	response:add_header('set-cookie', 'a=1')
@@ -254,6 +257,25 @@ threads.start(function (port, limited_port)
 	-- connection: close in a response closes the connection
 	report.close = http.fetch('GET', base .. '/close').body
 
+	-- the same requests through the curl command, as https:// urls are made, if curl is installed
+	if os.execute('command -v curl > /dev/null 2>&1') then
+		local curl = {}
+		curl.hello = http.fetch_curl('GET', base .. '/hello?name=curl').body
+		curl.missing = http.fetch_curl('GET', base .. '/missing').status
+		curl.post = http.fetch_curl('POST', base .. '/echo_body', 'some "body"\n', { ['x-test'] = 'quoted "value" \\ here' }).body
+		curl.empty_post = http.fetch_curl('POST', base .. '/echo', nil).body
+		curl.large = #http.fetch_curl('POST', base .. '/echo', string.rep('x', 300000)).body
+		curl.cookies = http.fetch_curl('GET', base .. '/cookies').headers['set-cookie']
+		local head = http.fetch_curl('HEAD', base .. '/hello')
+		curl.head = head.status .. ' ' .. head.body
+		local long = http.fetch_curl('GET', base .. '/hello?name=' .. string.rep('a', 2000))
+		curl.gzip = long.headers['content-encoding'] .. ' ' .. #long.body
+		curl.refused = select(2, pcall(http.fetch_curl, 'GET', 'http://127.0.0.1:1/', nil, nil, 2000))
+		curl.line_break = select(2, pcall(http.fetch_curl, 'GET', base .. '/hello', nil, { x = 'a\nb' }))
+		curl.not_a_url = select(2, pcall(http.fetch, 'GET', 'ftp://example.com/'))
+		report.curl = curl
+	end
+
 	-- the second server's limits
 	local limited_base = 'http://127.0.0.1:' .. limited_port
 	report.limited_ok = http.fetch('POST', limited_base .. '/echo', '0123456789').body
@@ -303,6 +325,22 @@ expect_equal(report.head, '200 ', 'a HEAD response has no body')
 expect_equal(report.invalid, '400 Bad Request')
 expect_equal(report.header_too_large, '431')
 expect_equal(report.close, 'closing')
+if report.curl then
+	local curl = report.curl
+	expect_equal(curl.hello, 'hello curl')
+	expect_equal(curl.missing, 404)
+	expect_equal(curl.post, 'POST quoted "value" \\ here some "body"\n', 'a body and header are sent as they are')
+	expect_equal(curl.empty_post, 'POST 0')
+	expect_equal(curl.large, #'POST 300000', 'a large body is sent without waiting for 100 continue')
+	expect_equal(curl.cookies, 'a=1, b=2')
+	expect_equal(curl.head, '200 ')
+	expect_equal(curl.gzip, 'gzip ' .. #('hello ' .. string.rep('a', 2000)), 'a gzip response is decoded')
+	assert(curl.refused:find('^http: GET http://127.0.0.1:1/ failed, '), curl.refused)
+	assert(curl.line_break:find('cannot contain line breaks'), curl.line_break)
+	assert(curl.not_a_url:find('needs an http:// or https:// url'), curl.not_a_url)
+else
+	print('  (curl is not installed, so http.fetch_curl was not tested)')
+end
 expect_equal(report.limited_ok, '0123456789')
 expect_equal(report.limited_body, 413)
 expect_equal(report.limited_header, 431)

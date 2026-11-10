@@ -1,16 +1,30 @@
--- crypto — hashing, HMAC, encodings and secure random values
+-- crypto — hashing, HMAC, encodings, secure random values, password hashing
+-- and encryption
 --
 -- local crypto = require('rascal.crypto')
 -- local digest = crypto.hex(crypto.sha256('some data'))
 -- local signature = crypto.hmac('sha256', secret, message)
 -- local session_id = crypto.random_token(32)
 --
--- Digests and HMACs are raw bytes, use crypto.hex or crypto.base64 to make
--- text from them. They are from Mbed TLS (see src/crypto.c). Random values
--- are read from /dev/urandom, so are suitable for secrets such as session
--- ids, tokens and login codes, unlike math.random.
+-- local hash = crypto.hash_password(password)       -- store this
+-- if crypto.verify_password(hash, attempt) then ... end
+--
+-- local key = crypto.secret_key()
+-- local encrypted = crypto.encrypt(key, 'a secret')
+-- local text = crypto.decrypt(key, encrypted)       -- nil if it was changed
+--
+-- local public_key, secret_key = crypto.key_pair()
+-- local sealed = crypto.seal(public_key, 'for the owner of secret_key')
+-- local text = crypto.unseal(secret_key, sealed)
+--
+-- Digests, HMACs, keys and encrypted data are raw bytes, use crypto.hex or
+-- crypto.base64 to make text from them. Digests are from Mbed TLS (see
+-- src/crypto.c), password hashing and encryption from libsodium (see
+-- src/sodium.c). Random values are read from /dev/urandom, so are suitable
+-- for secrets such as session ids, tokens and login codes, unlike math.random.
 
 local core = require('rascal.crypto.core')
+local sodium = require('rascal.crypto.sodium')
 
 local crypto = {}
 
@@ -114,6 +128,71 @@ function crypto.uuid()
 	bytes[9] = (bytes[9] & 0x3f) | 0x80	-- the RFC 4122 variant
 	local hex = crypto.hex(string.char(table.unpack(bytes)))
 	return hex:sub(1, 8) .. '-' .. hex:sub(9, 12) .. '-' .. hex:sub(13, 16) .. '-' .. hex:sub(17, 20) .. '-' .. hex:sub(21, 32)
+end
+
+-- passwords --------------------------------------------------------------------------------
+
+-- a hash of a password to store, with argon2id. It includes a random salt and
+-- its settings, as text, eg. '$argon2id$v=19$m=65536,t=2,p=1$...'.
+-- Strength is 'interactive' (the default, using 64MB for a fraction of a second),
+-- 'moderate' (256MB) or 'sensitive' (1GB, for several seconds). Hashing holds
+-- up its thread, so a busy server can hash in worker threads
+function crypto.hash_password(password, strength)
+	return sodium.pwhash_str(password, strength)
+end
+
+-- does a password match a hash from crypto.hash_password
+function crypto.verify_password(hash, password)
+	return sodium.pwhash_str_verify(hash, password)
+end
+
+-- was a hash made at another strength (or isn't a hash), so should be made
+-- again, eg. when the user next logs in with the password
+function crypto.password_needs_rehash(hash, strength)
+	return sodium.pwhash_str_needs_rehash(hash, strength)
+end
+
+-- secret key encryption --------------------------------------------------------------------
+
+-- a random key for crypto.encrypt and crypto.decrypt, 32 bytes
+function crypto.secret_key()
+	return core.random_bytes(sodium.secret_key_size)
+end
+
+-- a message encrypted with a secret key, with XSalsa20 and Poly1305. Each
+-- encryption is different, and the result is 40 bytes longer than the message
+function crypto.encrypt(key, message)
+	return sodium.secretbox(key, message)
+end
+
+-- a message from crypto.encrypt, or nil if the key is wrong or the data was changed
+function crypto.decrypt(key, data)
+	return sodium.secretbox_open(key, data)
+end
+
+-- public key encryption --------------------------------------------------------------------
+
+-- a new public key and its secret key, 32 bytes each, for crypto.seal and crypto.unseal
+function crypto.key_pair()
+	return sodium.box_keypair()
+end
+
+-- the public key that belongs with a secret key
+function crypto.public_key(secret_key)
+	return sodium.box_public_key(secret_key)
+end
+
+-- a message sealed with a public key, so only the owner of its secret key can
+-- read it. The sender stays anonymous: anyone with the public key can seal
+-- messages, so a sealed message says nothing about who sent it. The result is
+-- 48 bytes longer than the message
+function crypto.seal(public_key, message)
+	return sodium.box_seal(public_key, message)
+end
+
+-- a message from crypto.seal, or nil if it wasn't sealed for this secret key or was changed
+function crypto.unseal(secret_key, data)
+	return sodium.box_seal_open(secret_key, data)
 end
 
 return crypto

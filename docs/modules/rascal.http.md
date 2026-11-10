@@ -399,10 +399,20 @@ print(response.status, response:json().id)
 It's a minimal client, for tests and local services:
 - **Blocking:** it blocks its thread until the response arrives, so never call a server running in the same thread.
 - **Timeout:** it raises an error after `timeout` milliseconds, 10000 by default.
-- **Plain HTTP only:** it supports `http://` URLs, with no TLS, redirects or chunked responses.
+- **HTTPS with curl:** `https://` URLs are fetched with the `curl` command, which must be installed, as it is on macOS and most Linux systems. It uses the system's trusted certificates, and can use HTTP/2. See [http.fetch_curl](#httpfetch_curlmethod-url-body-headers-timeout).
+- **Plain HTTP itself:** `http://` URLs are fetched without curl, with no redirects or chunked responses.
 - **Compression:** it sends `accept-encoding: gzip`, unless the headers give an `accept-encoding`, and decodes a gzip body, up to `http.max_fetch_size` (64MB). The headers are kept as they were received, so `content-encoding` shows the body was compressed.
 
 For websockets, see [a websocket client](#a-websocket-client).
+
+### http.fetch_curl(method, url, body, headers, timeout)
+
+The same as `http.fetch`, always with the `curl` command, for `http://` or `https://` URLs. `http.fetch` uses it for every `https://` URL.
+
+- **Nothing on the command line:** the URL, headers and options are given to curl in a temporary config file, and the body in a temporary file. So nothing is quoted for the shell, and no header is shown in the process list. Header values and URLs can't contain line breaks.
+- **The same response:** redirects aren't followed, a compressed response is decoded with its headers kept as they were received, and duplicate headers are joined with commas.
+- **Errors:** it raises an error with curl's message if the request fails, eg. `http: GET https://example.com/ failed, Could not resolve host: example.com`, or if curl isn't installed.
+- **Cost:** each request starts a curl process, which is fine for scripts, webhooks and calls to other services. To make requests without holding up a server's thread, make them in [another thread](rascal.threads.md).
 
 ## Utilities
 

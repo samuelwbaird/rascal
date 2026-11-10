@@ -16,7 +16,7 @@ rascal's own Lua modules, embedded in the executable.
 | [rascal.http](modules/rascal.http.md) | an HTTP server, handlers, requests and responses, and a minimal client |
 | [rascal.database](modules/rascal.database.md) | simple SQLite access |
 | [rascal.stowage](modules/rascal.stowage.md) | a key value store with a log and reverse index per key |
-| [rascal.crypto](modules/rascal.crypto.md) | hashing, HMAC, encodings and secure random values |
+| [rascal.crypto](modules/rascal.crypto.md) | hashing, HMAC, encodings, secure random values, password hashing and encryption |
 | [rascal.build](modules/rascal.build.md) | what the executable was built with |
 
 ## Technical reference
@@ -58,6 +58,10 @@ Each is downloaded at a pinned version, checked against its sha256 and compiled 
 | lua-cjson | `cjson` | [lua-cjson manual](https://www.kyne.com.au/~mark/software/lua-cjson-manual.html), with [OpenResty's additions](https://github.com/openresty/lua-cjson#readme) |
 | lua-cmsgpack | `cmsgpack` | [lua-cmsgpack](https://github.com/antirez/lua-cmsgpack#readme) |
 | LuaFileSystem | `lfs` | [LuaFileSystem manual](https://lunarmodules.github.io/luafilesystem/manual.html) |
+| LPeg | `lpeg`, `re` | [LPeg](https://www.inf.puc-rio.br/~roberto/lpeg/) and [re](https://www.inf.puc-rio.br/~roberto/lpeg/re.html) |
+| luautf8 | `lua-utf8` | [luautf8](https://github.com/starwing/luautf8#readme) |
+| argparse | `argparse` | [argparse tutorial](https://argparse.readthedocs.io/) |
 | zlib, lua-zlib | `zlib` | [zlib manual](https://zlib.net/manual.html) and [lua-zlib](https://github.com/brimworks/lua-zlib#readme) |
 | picohttpparser | `rascal.http.parser` | [picohttpparser](https://github.com/h2o/picohttpparser#readme) |
 | Mbed TLS | `rascal.crypto.core` | [Mbed TLS documentation](https://mbed-tls.readthedocs.io/) |
+| libsodium | `rascal.crypto.sodium` | [libsodium documentation](https://doc.libsodium.org/) |

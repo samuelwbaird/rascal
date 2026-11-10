@@ -73,6 +73,9 @@ To build from a clone instead, use `make && make install`. That needs `xcode-sel
 | `cjson`, `cjson.safe` | [lua-cjson](https://github.com/openresty/lua-cjson) (OpenResty) | 2.1.0.19 |
 | `cmsgpack`, `cmsgpack.safe` | [lua-cmsgpack](https://github.com/antirez/lua-cmsgpack) | 0.4.0 |
 | `lfs` | [LuaFileSystem](https://github.com/lunarmodules/luafilesystem) | 1.9.0 |
+| `lpeg`, `re` | [LPeg](https://www.inf.puc-rio.br/~roberto/lpeg/) | 1.1.0 |
+| `lua-utf8` | [luautf8](https://github.com/starwing/luautf8), UTF-8 aware string functions | 0.1.6 |
+| `argparse` | [argparse](https://github.com/luarocks/argparse), command line parsing | 0.7.1 |
 | `zlib` | [lua-zlib](https://github.com/brimworks/lua-zlib) with [zlib](https://zlib.net) | 1.4 / 1.3.2 |
 | `prelude` | [prelude](https://github.com/samuelwbaird/prelude), embedded from `lua/` | |
 | `rascal.database` | simple SQLite access over lsqlite3, embedded from `lua/rascal/database.lua` | |
@@ -80,10 +83,10 @@ To build from a clone instead, use `make && make install`. That needs `xcode-sel
 | `rascal.messaging` | the shared ZeroMQ context, a loop per thread, inproc sockets by name | |
 | `rascal.threads` | start threads from functions or Lua source, with arguments | |
 | `rascal.services` | serve objects as named services (REQ/REP, ROUTER, DEALER, PUSH/PULL, PUB/SUB), including balanced across worker threads | |
-| `rascal.http` | an HTTP server, with handlers in the server thread or in worker threads, websockets, gzip and websocket compression, and a minimal client | |
+| `rascal.http` | an HTTP server, with handlers in the server thread or in worker threads, websockets, gzip and websocket compression, and a minimal client (`https://` with the curl command) | |
 | `rascal.http.compression` | gzip for HTTP bodies and permessage-deflate for websocket messages, over lua-zlib | |
 | `rascal.http.parser` | [picohttpparser](https://github.com/h2o/picohttpparser), parsing HTTP requests and responses | 1.4+ |
-| `rascal.crypto` | hashing, HMAC, hex and base64, and secure random values, with digests from [Mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | 3.6.7 |
+| `rascal.crypto` | hashing, HMAC, hex and base64, secure random values, password hashing and encryption, with digests from [Mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) and the rest from [libsodium](https://libsodium.org) | 3.6.7 / 1.0.22 |
 | `rascal.build` | build information, see [rascal.build](docs/modules/rascal.build.md) | |
 
 `make info` lists the pinned versions.
